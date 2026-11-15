@@ -74,9 +74,14 @@ class Term:
     def _pump(self, timeout: float) -> bool:
         if select.select([self.master], [], [], timeout)[0]:
             try:
-                self.seen += os.read(self.master, 4096).decode(errors="replace").replace("\r", "")
+                data = os.read(self.master, 4096)
             except OSError:
                 return False
+            if (
+                not data
+            ):  # macOS: a master whose slave the child has closed reads as the end of the file (and select keeps
+                return False  # saying "readable") although the test holds its own slave open
+            self.seen += data.decode(errors="replace").replace("\r", "")
         return True
 
     def expect(self, text: str, timeout: float = 60) -> str:
