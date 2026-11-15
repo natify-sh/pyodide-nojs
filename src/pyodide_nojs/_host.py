@@ -1303,7 +1303,8 @@ class Pyodide:
         store = self.guest.store
         p = self.guest.ex["PyMem_Malloc"](store, len(src))
         self._wr(p, src)
-        self._sig_posted = False  # only a post that comes during this run can be late for it: older ones persist
+        with self._sig_lock:  # (the flags are read and written under the lock interrupt() holds: no update is lost)
+            self._sig_posted = False  # only a post that comes during this run can be late for it: older ones persist
         try:
             rc = self.guest.ex["PyRun_SimpleString"](store, p)
         except (
@@ -1334,7 +1335,8 @@ class Pyodide:
             )
         finally:  # also for an exception that is none of those
             _tty.restore(self._tty_saved)
-        posted, self._sig_since_run = self._sig_posted or self._sig_since_run, False
+        with self._sig_lock:  # a post between the read and the clear would be forgotten, and the run it hits would
+            posted, self._sig_since_run = self._sig_posted or self._sig_since_run, False  # report 1, not 130
         if self._sig_posted and self._exited is None:
             self._drop_late_signal()
         rc_path = self.root / rc_file.lstrip("/")
