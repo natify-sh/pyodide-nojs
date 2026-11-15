@@ -88,7 +88,7 @@ Report:      files changed, commands run with output, docs updated, open questio
 * `_guest.py` (`Guest`) is the one read-only handle to what the components share (the store, exports, memory, table, the memory accessors, and `cur`, the call contexts, changed only inside `Guest` (`Guest.wrap`)); `_net.py` (`Net`) is the host's sockets and fetch with their state. **Every mutable piece of state has one owner**: components never read or write each other's attributes, only call narrow public methods, pass values or hold `Guest`; no mixins. `tests/test_state_ownership.py` checks it on the AST (a new component is added to its list) and pyright's `reportPrivateUsage` is an error for `src` and `tools` (the tests may use private names).
 * Wheels with legacy exceptions are converted at `dlopen` by `wasm-opt.wasm` (`Pyodide.converted` counts them); the modules the build ships are converted at build time.
 * The tests need the build: `sh tools/build_data.sh pyo-build` and `sh tools/prepare_testenv.sh work` (`WASM_OPT_WASM=path` skips the 12-minute build of `wasm-opt.wasm`). A missing build is a skip locally and a failure with `CI` set.
-* A host function must not hold the engine across a wait for another thread; there are no threads here (as in Pyodide).
+* A host function must not hold the engine across a wait for another thread. The library starts no threads and the guest has none (as in Pyodide). The CLI runs the guest on a worker thread and keeps the main thread free for Ctrl-C (Pyodide's own advice); `Pyodide.interrupt()` is safe from any thread: it stores one word in the guest's memory through a base pointer that cannot move (`memory_may_move=False`), under one lock that `close()` takes first, and never touches the wasmtime Store.
 
 ## Commands
 ```
