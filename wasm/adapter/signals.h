@@ -12,7 +12,8 @@
 EXPORT("__call_sighandler") void call_sighandler(u32 fp, i32 sig) { ((void (*)(i32))fp)(sig); }
 
 typedef struct {
-    u32 cell;           // where the host posts a signal number (its address: __nojs_sigcell_addr)
+    u32 cell;           // where the host posts a signal number (its address: __nojs_sigcell_addr), SIGINT excepted:
+    u32 cell_int;       // the cell right after it is SIGINT's own, so that a Ctrl-C and a resize never replace each other
     double deadline[3];  // ITIMER_REAL, VIRTUAL, PROF: when it fires (get_now's clock), 0: not armed
 } Sig;
 __asm__(".globaltype sig_state, i32\nsig_state:\n");
@@ -53,9 +54,13 @@ EXPORT("_Py_CheckEmscriptenSignals_Helper") i32 check_signals(void) {
         u32 out[2], slot = dl_sym(0, (const char *)nm, 19, out);
         if (out[0] == 2 || out[0] == 3) ((void (*)(i32, double))slot)(which, now);  // 3: a slot made by this lookup
     }
-    i32 v = (i32)s->cell;
-    if (v) s->cell = 0;  // (not an unconditional store: a post between the load and that store of 0 would be lost, and this is
-                         // reached every few dozen bytecodes with nothing posted)
+    // SIGINT first, then another signal: both are taken, one per look (a Ctrl-C does not drop a pending resize). The clears
+    // are not unconditional stores: a post between the load and the store of 0 would be lost, and this is reached every
+    // few dozen bytecodes with nothing posted. (A post of the same signal in that window merges with the one taken.)
+    i32 v = (i32)s->cell_int;
+    if (v) return s->cell_int = 0, v;
+    v = (i32)s->cell;
+    if (v) s->cell = 0;
     return v;
 }
 

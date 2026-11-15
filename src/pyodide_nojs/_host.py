@@ -782,10 +782,13 @@ class Pyodide:
             # the most a 32-bit memory can have), so base + address is valid for as long as `_sig` is set, and what
             # is written is one aligned word and one byte that the adapter and CPython read with plain loads. The
             # cell first: the look that sees the flag finds the cell.
-            # One word holds one signal: a pending SIGINT is never replaced (Ctrl-C wins over a resize that comes
-            # after it), another pending signal only by SIGINT. (The guest clears the word when it takes it; a take
-            # between this look and the write drops the new signal, a window of a few instructions.)
-            if signum == 2 or not ctypes.c_uint32.from_address(base + cell).value:
+            # Two words: SIGINT's own (the one after the cell) and one for any other signal, so a Ctrl-C and a resize
+            # never replace each other; of other signals a pending one is not replaced by a later one. (The guest
+            # clears a word when it takes it; of two other signals posted in the window of a few instructions between
+            # its look and its clear one can be lost, as can a second Ctrl-C, which merges with the first.)
+            if signum == 2:
+                ctypes.memmove(base + cell + 4, struct.pack("<I", 2), 4)
+            elif not ctypes.c_uint32.from_address(base + cell).value:
                 ctypes.memmove(base + cell, struct.pack("<I", signum), 4)
             ctypes.memmove(base + flag, b"\x01", 1)  # opt-in: no look for signals (no cost) until the first post
 
@@ -1359,7 +1362,7 @@ class Pyodide:
         with self._sig_lock:
             self._sig_posted = False
             if self._sig is not None:
-                self._wr(self._sig[1], bytes(4))
+                self._wr(self._sig[1], bytes(8))  # both words
 
     def close(self) -> None:
         with self._sig_lock:  # before anything is freed: a writer in another thread then gets a RuntimeError

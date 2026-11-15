@@ -82,32 +82,21 @@ def test_another_signal_runs_the_programs_handler(flavor: str, capfd: pytest.Cap
     assert capfd.readouterr().out.strip() == "handler ran [10]"
 
 
-def test_one_pending_signal_is_not_replaced_by_a_later_one_except_ctrl_c_wins(
+def test_a_pending_ctrl_c_and_another_signal_do_not_replace_each_other(
     flavor: str, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    """The cell holds one word: a pending SIGINT stays (a resize after Ctrl-C must not eat it), another pending signal
-    gives way only to SIGINT."""
-    probe = (
-        "got = []\ntry:\n    for i in range(10**6): pass\nexcept KeyboardInterrupt:\n    got.append('KI')\nprint(got)"
-    )
+    """SIGINT has a word of its own: a Ctrl-C and another signal are both taken, Ctrl-C first; of two other signals the
+    first stays. (SIGINT has a handler that records, so that no KeyboardInterrupt lands in the run's own wrapper.)"""
+    probe = "for i in range(10**6): pass\nprint(got)\ngot.clear()"
     with Pyodide(flavor) as py:
         assert (
-            py.run(
-                "import signal\nsignal.signal(28, lambda s, f: got.append(s))\n"
-                "signal.signal(10, lambda s, f: got.append(s))"
-            )
-            == 0
+            py.run("import signal\ngot = []\nfor n in (2, 10, 28): signal.signal(n, lambda s, f: got.append(s))") == 0
         )
-        py.interrupt(2)
-        py.interrupt(28)
-        assert py.run(probe) == 0
-        py.interrupt(10)
-        py.interrupt(28)
-        assert py.run(probe) == 0
-        py.interrupt(10)
-        py.interrupt(2)
-        assert py.run(probe) == 0
-    assert capfd.readouterr().out.split("\n")[:3] == ["['KI']", "[10]", "['KI']"]
+        for first, second in ((2, 28), (10, 28), (10, 2), (28, 2)):
+            py.interrupt(first)
+            py.interrupt(second)
+            assert py.run(probe) == 0
+    assert capfd.readouterr().out.split("\n")[:4] == ["[2, 28]", "[10]", "[2, 10]", "[2, 28]"]
 
 
 def test_no_signal_is_lost_when_each_is_posted_after_the_last_was_taken(flavor: str) -> None:
