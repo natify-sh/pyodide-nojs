@@ -4,7 +4,7 @@ packagings. The guest's changes of the host terminal live only while a run lasts
 a file) and Windows keep ENOTTY. The translation of the flag bits between the host's numbers and Linux's is tested with
 a stand-in for macOS's `termios` too (it runs on Linux).
 
-Every test that waits is bounded: a watchdog dumps the stacks and ends the run after 90 s, and the test waits on the
+Every test that waits is bounded: a watchdog dumps the stacks and ends the run after 150 s, and the test waits on the
 program's own output (never on a sleep)."""
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ if sys.platform != "win32":
 
 @pytest.fixture(autouse=True)
 def watchdog() -> Iterator[None]:
-    faulthandler.dump_traceback_later(90, exit=True)
+    faulthandler.dump_traceback_later(150, exit=True)
     yield
     faulthandler.cancel_dump_traceback_later()
 
@@ -101,7 +101,9 @@ class Term:
 
     def close(self) -> None:
         self.p.kill()
-        self.p.wait()
+        end = time.monotonic() + 30
+        while self.p.poll() is None and time.monotonic() < end:  # macOS: a process does not end while its tty output is
+            self._pump(0.1)  # unread, so the test keeps draining the master until it is gone
         os.close(self.master)
         os.close(self.slave)
 
