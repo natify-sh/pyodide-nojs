@@ -65,6 +65,10 @@ jobs:
 
       - name: pytest (offline)
         run: uv run --locked pytest -v -n auto -m "not network and not suite"
+      - name: Stacks of a hung terminal test
+        if: ${{ failure() }}
+        shell: bash
+        run: for f in "${TMPDIR:-/tmp}"/tty-hang-*.txt; do [ -s "$f" ] && { echo "== $f"; cat "$f"; }; done; true
 
   network:
     name: network checks

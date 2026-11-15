@@ -15,6 +15,7 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -34,9 +35,12 @@ if sys.platform != "win32":
 
 @pytest.fixture(autouse=True)
 def watchdog() -> Iterator[None]:
-    faulthandler.dump_traceback_later(150, exit=True)
-    yield
-    faulthandler.cancel_dump_traceback_later()
+    # the stacks go to a file (pytest-xdist hides a worker's output; the CI job prints these files after a failure)
+    with open(f"{tempfile.gettempdir()}/tty-hang-{os.getpid()}.txt", "w") as f:
+        faulthandler.dump_traceback_later(150, exit=True, file=f)
+        yield
+        faulthandler.cancel_dump_traceback_later()
+    os.unlink(f.name)
 
 
 # a session of its own whose controlling terminal is the pty: the kernel's SIGWINCH of a resize reaches its group
