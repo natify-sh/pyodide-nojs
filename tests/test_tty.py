@@ -50,17 +50,22 @@ BOOT = "import fcntl, os, sys, termios; fcntl.ioctl(0, termios.TIOCSCTTY, 0); os
 class Term:
     """The CLI running CODE with a pty as its stdin, stdout and stderr; the test holds both ends."""
 
-    def __init__(self, flavor: str, code: str, rows: int = 30, cols: int = 100) -> None:
+    def __init__(self, flavor: str, code: str, rows: int = 30, cols: int = 100, ctty: bool = False) -> None:
         self.master, self.slave = pty.openpty()
         self.resize(rows, cols, on=self.slave)
         self.before = termios.tcgetattr(self.slave)
-        cmd = [sys.executable, "-c", BOOT, sys.executable, "-m", "pyodide_nojs", "--flavor", flavor, "-c", code]
+        # ctty: the pty is the controlling terminal of a session of its own (SIGWINCH, the foreground group). Not
+        # otherwise: macOS takes the terminal from a descriptor when the session leader ends, and the tests look
+        # at it after the program has ended
+        cmd = [sys.executable, "-m", "pyodide_nojs", "--flavor", flavor, "-c", code]
+        if ctty:
+            cmd = [sys.executable, "-c", BOOT, sys.executable, *cmd[1:]]
         self.p = subprocess.Popen(
             cmd,
             stdin=self.slave,
             stdout=self.slave,
             stderr=self.slave,
-            start_new_session=True,
+            start_new_session=ctty,
             env=dict(os.environ, TERM="dumb"),
         )
         self.seen = ""
@@ -121,7 +126,7 @@ class Term:
 def term(flavor: str) -> Iterator[Any]:
     made: list[Term] = []
 
-    def make(code: str, **kw: int) -> Term:
+    def make(code: str, **kw: Any) -> Term:
         made.append(Term(flavor, code, **kw))
         return made[-1]
 
@@ -218,7 +223,8 @@ def test_a_resize_of_the_terminal_reaches_the_programs_sigwinch_handler(term) ->
         "def h(s, f):\n    got.append((s, tuple(os.get_terminal_size())))\n"
         "signal.signal(signal.SIGWINCH, h)\nprint('READY', flush=True)\nend = time.time() + 60\nn = 0\n"
         "while n < 2 and time.time() < end:\n    if len(got) > n:\n        print('WINCH', *got[n], flush=True)\n"
-        "        n += 1\nprint('DONE', n)"
+        "        n += 1\nprint('DONE', n)",
+        ctty=True,
     )
     t.expect("READY")
     t.resize(40, 120)
@@ -377,12 +383,14 @@ def test_the_foreground_group_and_the_window_size_can_be_set(term) -> None:
     t = term(
         "import fcntl, os, struct, termios\nprint('PG', os.tcgetpgrp(0) == os.getpgrp(), flush=True)\n"
         "fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', 11, 22, 0, 0))\n"
-        "print('SZ', tuple(os.get_terminal_size()), flush=True)"
+        "print('SZ', tuple(os.get_terminal_size()), flush=True)\nos.read(0, 1)",  # alive while the test looks
+        ctty=True,
     )
     t.expect("PG True")
     t.expect("SZ (22, 11)")
-    assert t.finish() == 0
     assert struct.unpack("HHHH", fcntl.ioctl(t.slave, termios.TIOCGWINSZ, bytes(8)))[:2] == (11, 22)  # the host's
+    t.send(b"x\n")  # (the pty is in line mode)
+    assert t.finish() == 0
 
 
 @posix_only
@@ -439,9 +447,8 @@ def test_each_standard_stream_is_asked_on_its_own_host_descriptor(flavor: str) -
     )
     try:
         _, err = p.communicate(timeout=80)
-        os.close(slave)
-        out = b""
-        while select.select([master], [], [], 0.5)[0]:
+        out = b""  # read while the test still holds the slave: macOS drops what is unread when the last slave closes
+        while b"ATTR1" not in out and select.select([master], [], [], 2)[0]:
             try:
                 d = os.read(master, 4096)
             except OSError:
@@ -454,6 +461,7 @@ def test_each_standard_stream_is_asked_on_its_own_host_descriptor(flavor: str) -
         assert text.split() == "ISATTY False True SIZE (34, 12) IN 59 ATTR1 7".split(), text
     finally:
         p.kill()
+        os.close(slave)
         os.close(master)
 
 
@@ -558,7 +566,11 @@ def test_ctrl_c_at_a_prompt_in_library_mode_ends_that_run_and_the_next_run_works
     """The default SIGINT handler raises KeyboardInterrupt inside the host's read of the terminal: the guest was
     unwound in the middle of that call, so that run is over (130) and the next one starts a new interpreter."""
     child = (
-        "from pyodide_nojs import Pyodide\n"
+        "import os\nfrom pyodide_nojs import Pyodide\n"
+        "read = Pyodide._fs_read\n"
+        # the host is about to read the terminal
+        "def at_read(self, *a):\n    os.write(1, b'BLOCKED\\n')\n    return read(self, *a)\n"
+        "Pyodide._fs_read = at_read\n"
         f"py = Pyodide({flavor!r})\n"
         "print('rc1', py.run('print(\"IN\", flush=True); input()'), flush=True)\n"
         "print('rc2', py.run('print(1 + 1)'), flush=True)\n"
@@ -576,7 +588,7 @@ def test_ctrl_c_at_a_prompt_in_library_mode_ends_that_run_and_the_next_run_works
                     seen += os.read(master, 4096).decode(errors="replace").replace("\r", "")
                 except OSError:
                     break
-            if "IN" in seen and not sent:
+            if "BLOCKED" in seen and not sent:
                 sent = True
                 p.send_signal(2)
         assert "rc1 130" in seen and "rc2 0" in seen and "\n2\n" in seen, seen
