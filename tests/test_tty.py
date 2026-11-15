@@ -101,6 +101,17 @@ class Term:
         before, self.seen = self.seen[:i], self.seen[i + len(text) :]
         return before
 
+    @staticmethod
+    def _masked(a: list) -> list:  # macOS's kernel sets PENDIN itself when the mode changes with input pending
+        return [*a[:3], a[3] & ~getattr(termios, "PENDIN", 0), *a[4:]]
+
+    @property
+    def before_masked(self) -> list:
+        return self._masked(self.before)
+
+    def attrs_after(self) -> list:
+        return self._masked(termios.tcgetattr(self.slave))
+
     def lflag(self) -> int:
         return termios.tcgetattr(self.slave)[3]
 
@@ -184,7 +195,7 @@ def test_setraw_changes_the_host_terminal_only_while_the_program_runs(term) -> N
     t.expect("RDY [0] b'q'")
     t.expect("IN False False")
     assert t.finish() == 0
-    assert termios.tcgetattr(t.slave) == t.before  # and back after: nothing the guest left behind
+    assert t.attrs_after() == t.before_masked  # and back after: nothing the guest left behind
 
 
 @posix_only
@@ -192,7 +203,7 @@ def test_a_program_that_fails_leaves_the_terminal_as_it_found_it(term) -> None:
     t = term("import tty\ntty.setcbreak(0)\nprint('CB', flush=True)\nraise SystemExit(3)")
     t.expect("CB")
     assert t.finish() == 3
-    assert termios.tcgetattr(t.slave) == t.before
+    assert t.attrs_after() == t.before_masked
 
 
 @posix_only
@@ -212,7 +223,7 @@ def test_tcsetattr_round_trip_and_the_hosts_own_numbers(term) -> None:
     t.send(b"\n")
     t.expect("BACK True")
     assert t.finish() == 0
-    assert termios.tcgetattr(t.slave) == t.before
+    assert t.attrs_after() == t.before_masked
 
 
 @posix_only
@@ -244,7 +255,7 @@ def test_getpass_turns_the_echo_of_the_hosts_terminal_off(term) -> None:
     t.send(b"secret\n")
     assert t.expect("PW 'secret'") == "\n"  # nothing of it was echoed
     assert t.finish() == 0
-    assert termios.tcgetattr(t.slave) == t.before
+    assert t.attrs_after() == t.before_masked
 
 
 @posix_only
@@ -375,7 +386,7 @@ def test_changes_of_two_descriptors_of_one_terminal_are_undone_in_reverse(term) 
     t = term("import tty\ntty.setcbreak(0)\ntty.setraw(1)\nprint('SET', flush=True)")
     t.expect("SET")
     assert t.finish() == 0
-    assert termios.tcgetattr(t.slave) == t.before
+    assert t.attrs_after() == t.before_masked
 
 
 @posix_only
