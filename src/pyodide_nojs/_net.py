@@ -40,6 +40,16 @@ from ._sockaddr import (
 log = logging.getLogger("pyodide_nojs")
 
 
+class _StdStream:
+    """A standard stream (a terminal) of the host's process as `_poll` sees a socket: a `fileno()` and nothing else."""
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
+
+
 class Net:
     def __init__(self, guest: Guest) -> None:
         self.guest = guest
@@ -255,7 +265,9 @@ class Net:
         t = None if timeout_ms < 0 else timeout_ms / 1000
         live = [(i, s) for i, s in enumerate(socks) if s is not None and s.fileno() >= 0]
         out = [32] * len(socks)
-        if not hasattr(select, "poll"):  # Windows: select(); an error condition is all its third set can say
+        # select() where there is no poll (Windows), and whenever a terminal is polled: macOS's poll() can answer
+        # POLLNVAL for one. Then a socket's ERR and HUP come only from what select() can say.
+        if not hasattr(select, "poll") or any(isinstance(s, _StdStream) for s in socks):
             hup = [s in self._shut_both for _, s in live]  # select has no hang-up: shut down both ways is the one known
             rd, wr, ex = select.select(
                 [s for i, s in live if events[i] & 1],
@@ -310,7 +322,27 @@ class Net:
             return 0
         handles = struct.unpack(f"<{n}i", self.guest.rd(hp, 4 * n))
         events = list(struct.unpack(f"<{n}i", self.guest.rd(evp, 4 * n)))
-        revents = self._poll([self._socks.get(h) for h in handles], events, timeout_ms)
+        # A negative handle is a standard stream of the guest: -1 - the host's descriptor (0, 1, 2). A TERMINAL is
+        # polled for real (the guest's reads of it are the host's own, with no buffer of ours in between: the adapter's
+        # stdin_read); a pipe or a file, and every standard stream on Windows (select() takes only sockets there), is
+        # ready for what it is asked, as it always was (a pipe's readiness could not see what wasmtime's own stdin
+        # had already read), and then nothing waits for the sockets of the same call.
+        real = [h < 0 and os.name == "posix" and os.isatty(-1 - h) for h in handles]
+        fixed = [h < 0 and not r for h, r in zip(handles, real, strict=True)]
+        objs = [
+            None if f else _StdStream(-1 - h) if r else self._socks.get(h)
+            for h, r, f in zip(handles, real, fixed, strict=True)
+        ]
+        ready = any(
+            f and e & 5 for f, e in zip(fixed, events, strict=True)
+        )  # a stream that is asked for what it always has
+        if not all(fixed):
+            revents = self._poll(objs, events, 0 if ready else timeout_ms)
+        else:
+            revents = [0] * n
+            if not ready and timeout_ms > 0:
+                time.sleep(timeout_ms / 1000)
+        revents = [e & 5 if f else r for r, e, f in zip(revents, events, fixed, strict=True)]
         self.guest.wr(revp, struct.pack(f"<{n}i", *revents))
         return sum(1 for x in revents if x)
 

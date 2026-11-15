@@ -171,8 +171,9 @@ EXPORT("__syscall_setsockopt_host") i32 sc_setsockopt(i32 fd, i32 level, i32 opt
     return net_setopt(hof(fd), level, opt, val, len);
 }
 
-// struct pollfd {int fd; short events, revents;}. Sockets are polled by the host, all in one call, with the timeout;
-// a file is always ready for what it is asked (POLLIN, POLLOUT); a descriptor that is not open is POLLNVAL; a negative
+// struct pollfd {int fd; short events, revents;}. Sockets and the standard streams are polled by the host, all in one call,
+// with the timeout (a socket by its handle; a standard stream by -1 - its host descriptor: a terminal or a pipe on stdin
+// is polled for real when it is a terminal; a pipe or a file on it is always ready); a file is always ready for what it is asked (POLLIN, POLLOUT); a descriptor that is not open is POLLNVAL; a negative
 // one is ignored. A file that is ready, or an invalid descriptor, makes the sockets answer at once (nothing to wait for).
 #define POLLNVAL 32
 static i32 do_poll(u8 *fds, i32 n, i32 timeout) {
@@ -183,8 +184,8 @@ static i32 do_poll(u8 *fds, i32 n, i32 timeout) {
     for (i32 k = 0; k < n; k++) {
         i32 fd = *(i32 *)(fds + 8 * k);
         i16 ev = *(i16 *)(fds + 8 * k + 4), rev = 0;
-        if (fd >= 0 && is_sock(fd)) {
-            hs[nsock] = hof(fd), evs[nsock] = ev & 7, revs[nsock] = 0;  // POLLIN, POLLPRI, POLLOUT
+        if (fd >= 0 && (is_sock(fd) || fd_std(fd))) {
+            hs[nsock] = is_sock(fd) ? hof(fd) : -1 - hof(fd), evs[nsock] = ev & 7, revs[nsock] = 0;  // POLLIN, POLLPRI, POLLOUT
             nsock++;
         } else if (is_pipe(fd)) {  // PIPEFS's poll: ready from its buffer, now
             rev = (i16)(pipe_mask(vobj(fd)) & (ev | 8 | 16 | POLLNVAL));
@@ -204,7 +205,7 @@ static i32 do_poll(u8 *fds, i32 n, i32 timeout) {
     i32 j = 0;
     for (i32 k = 0; k < n; k++) {
         i32 fd = *(i32 *)(fds + 8 * k);
-        if (fd >= 0 && is_sock(fd)) *(i16 *)(fds + 8 * k + 6) = (i16)revs[j++];
+        if (fd >= 0 && (is_sock(fd) || fd_std(fd))) *(i16 *)(fds + 8 * k + 6) = (i16)revs[j++];
         if (*(i16 *)(fds + 8 * k + 6)) ready++;
     }
     if (buf) free(buf);
@@ -264,14 +265,22 @@ EXPORT("getprotobyname") u32 getprotobyname_(const char *name) {
 
 // ioctl as Pyodide's JavaScript answers: a descriptor that is not open is EBADF; FIONREAD and FIONBIO belong to
 // sockets (a file has no ioctl: ENOTTY; a pipe: FIONREAD is the bytes buffered, FIONBIO is EINVAL); the terminal
-// requests are ENOTTY (no descriptor here is a terminal for them); anything else is EINVAL. (FIOCLEX and FIONCLEX never
+// requests of a standard stream go to the host (its own terminal: ENOTTY when it has none), of any other descriptor
+// they are ENOTTY (the virtual /dev/tty answers them as the host's terminal if it has one, else as Pyodide's fake one); anything
+// else is EINVAL. (FIOCLEX and FIONCLEX never
 // come here: the main module's libc answers them with 0 itself, so os.set_inheritable(fd, True) is a no-op; F_SETFD works.)
 EXPORT("__syscall_ioctl") i32 sc_ioctl(i32 fd, i32 op, i32 va) {
     if (!vobj(fd)) return -EBADF;
     i32 *argp = va ? *(i32 **)va : 0;  // va points at the variable arguments; the first is the argument's address
     if (is_dev(fd) && (vobj(fd)->dev == VN_TTY || vobj(fd)->dev == VN_TTY1) &&
-        ((op >= 0x5401 && op <= 0x5404) || op == 0x5413 || op == 0x5414 || op == 0x540F || op == 0x5410))
+        ((op >= 0x5401 && op <= 0x5404) || op == 0x5413 || op == 0x5414 || op == 0x540B || op == 0x540F || op == 0x5410)) {
+        if (vobj(fd)->dev == VN_TTY) {  // /dev/tty is the host's terminal when stdin (else stdout) is one: getpass turns echo off
+            i32 r = fs_ioctl(0, op, (u8 *)argp);
+            if (r == -ENOTTY) r = fs_ioctl(1, op, (u8 *)argp);
+            if (r != -ENOTTY) return r;
+        }
         return tty_ioctl(vobj(fd)->dev, op, (u8 *)argp);
+    }
     if (is_pipe(fd) && (op == 0x541B || op == 0x5421)) {  // PIPEFS: FIONREAD is the bytes buffered, its other ioctls EINVAL
         if (op == 0x5421) return -28;
         if (!argp) return -21;
@@ -286,8 +295,9 @@ EXPORT("__syscall_ioctl") i32 sc_ioctl(i32 fd, i32 op, i32 va) {
         sock_set_nb(fd, *argp != 0);
         return 0;
     }
-    if ((op >= 0x5401 && op <= 0x5408) || op == 0x540B || op == 0x540F || op == 0x5410 || op == 0x5413 || op == 0x5414)
-        return -ENOTTY;
+    if ((op >= 0x5401 && op <= 0x5404) || op == 0x540B || op == 0x540F || op == 0x5410 || op == 0x5413 || op == 0x5414)
+        return fd_std(fd) ? fs_ioctl(hof(fd), op, (u8 *)argp) : -ENOTTY;  // TCGETS TCSETS* TCFLSH TIOCGPGRP TIOCSPGRP TIOCGWINSZ TIOCSWINSZ
+    if (op >= 0x5405 && op <= 0x5408) return -ENOTTY;  // the old TCGETA family
     return -28;  // EINVAL
 }
 
@@ -336,6 +346,7 @@ EXPORT("fd_read") i32 x_fd_read(i32 fd, const u32 *iov, i32 n, i32 *nread) {
     if (empty && fd_std(fd)) return *nread = 0;  // a read of 0 bytes on stdin must not wait for input
     if (is_pipe(fd)) return pipe_read(vobj(fd), iov, n, nread);
     if (is_dev(fd)) return dev_read(vobj(fd), iov, n, nread);
+    if (fd_std(fd) && hof(fd) == 0) return stdin_read(iov, n, nread);
     if (!is_sock(fd)) return eisdir(fd, n <= 1 || !is_regular(fd) ? w_fd_read(rfd(fd), iov, n, nread) : file_iov(0, rfd(fd), iov, n, 0, nread));
     if (would_block(fd, 0, 1)) return EAGAIN_;
     i32 tot = 0;

@@ -339,6 +339,29 @@ static u32 iov_total(const u32 *iov, i32 n) {  // the bytes of the buffers, at m
     for (i32 k = 0; k < n; k++) t += iov[2 * k + 1];
     return t > 0x7ffff000ull ? 0x7ffff000u : (u32)t;
 }
+// The guest's reads of its stdin. When the host's stdin is a TERMINAL the host reads it (fs.read: os.read of at most what is
+// asked, one call): wasmtime's own stdin takes everything pending into a buffer the first time, which the host's poll, tcflush
+// and an escape sequence's second byte (read(1) then select) could not see. A pipe or a file, and Windows, keep WASI's read
+// (a pipe is polled as always ready). Asked once (a TIOCGWINSZ answers only for a terminal), kept in a global: 0 not asked,
+// 1 the host reads, 2 WASI reads. A stream is one call, as WASI's: only the first buffer that has room is filled.
+__asm__(".globaltype stdin_mode, i32\nstdin_mode:\n");
+static i32 stdin_read(const u32 *iov, i32 n, i32 *nread) {
+    i32 m;
+    __asm__ volatile("global.get stdin_mode\n\tlocal.set %0" : "=r"(m));
+    if (!m) {
+        u8 ws[8];
+        m = fs_ioctl(0, 0x5413, ws) == 0 ? 1 : 2;
+        __asm__ volatile("local.get %0\n\tglobal.set stdin_mode" : : "r"(m));
+    }
+    if (m == 2) return w_fd_read(0, iov, n, nread);
+    for (i32 k = 0; k < n; k++) {
+        if (!iov[2 * k + 1]) continue;
+        i32 r = fs_read(0, (u8 *)iov[2 * k], (i32)iov[2 * k + 1]);
+        if (r < 0) return -r;
+        return *nread = r, 0;
+    }
+    return *nread = 0, 0;
+}
 static i32 dev_read(const Obj *o, const u32 *iov, i32 n, i32 *nread) {
     i32 id = o->dev;
     if ((o->oflags & 3) == 1) return FE_BADF;  // opened write-only
@@ -347,7 +370,7 @@ static i32 dev_read(const Obj *o, const u32 *iov, i32 n, i32 *nread) {
     if (id == VN_STDOUT || id == VN_STDERR) return FE_IO;
     u32 room = iov_total(iov, n);
     if (id == VN_NULL || !room) return *nread = 0;  // (a read of no bytes must not wait for stdin)
-    if (id == VN_TTY || id == VN_STDIN) return w_fd_read(0, iov, n, nread);
+    if (id == VN_TTY || id == VN_STDIN) return stdin_read(iov, n, nread);
     for (i32 k = 0, left = (i32)room; k < n && left > 0; k++) {  // random, urandom
         i32 l = iov[2 * k + 1] < (u32)left ? (i32)iov[2 * k + 1] : left;
         for (i32 at = 0; at < l; at += 256)

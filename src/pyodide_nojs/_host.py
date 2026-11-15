@@ -30,7 +30,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from . import _cif, _engine, _timecalc, _wasm
+from . import _cif, _engine, _timecalc, _tty, _wasm
 from ._consts import (
     BASE_ENV,
     FLAVORS,
@@ -200,6 +200,9 @@ class Pyodide:
         # snapshot of the memory would not hold it, so none is taken. (The time zone libc read at init is in the
         # snapshot's key instead: every interpreter reads it.)
         self.host_state = False
+        # the host terminal's attributes as they were before the guest changed them (descriptor -> termios list), put
+        # back at the end of every run() and by close(): _tty.py
+        self._tty_saved: dict[int, list] = {}
         self.closures_out = 0  # closures the guest holds (allocated, not yet freed): their slots are the host's
         self.live_funcs: dict[int, tuple] = {}  # table slot -> (signature, Func, state) of a closure in use
         self._svc_ex: Any = (
@@ -779,7 +782,11 @@ class Pyodide:
             # the most a 32-bit memory can have), so base + address is valid for as long as `_sig` is set, and what
             # is written is one aligned word and one byte that the adapter and CPython read with plain loads. The
             # cell first: the look that sees the flag finds the cell.
-            ctypes.memmove(base + cell, struct.pack("<I", signum), 4)
+            # One word holds one signal: a pending SIGINT is never replaced (Ctrl-C wins over a resize that comes
+            # after it), another pending signal only by SIGINT. (The guest clears the word when it takes it; a take
+            # between this look and the write drops the new signal, a window of a few instructions.)
+            if signum == 2 or not ctypes.c_uint32.from_address(base + cell).value:
+                ctypes.memmove(base + cell, struct.pack("<I", signum), 4)
             ctypes.memmove(base + flag, b"\x01", 1)  # opt-in: no look for signals (no cost) until the first post
 
     def _cpu_clock(self, cid: int, res: int, out: int) -> int:
@@ -818,6 +825,27 @@ class Pyodide:
             return werr(e)
         except Exception:  # never a trap in the guest
             return -WASI_ERRNO["IO"]
+
+    def _fs_ioctl(self, fd: int, op: int, argp: int) -> int:
+        """ioctl on one of the host's standard descriptors (the guest never names another): the requests _tty.py knows
+        (the terminal's, Linux's numbers), ENOTTY for the rest."""
+        if fd not in (0, 1, 2):
+            return -WASI_ERRNO["BADF"]
+        r = _tty.request(self._tty_saved, op, fd, argp, self._rd, self._wr)
+        if self._tty_saved:
+            self.host_state = True  # the host's terminal is changed: a snapshot of the memory would not hold that
+        return r
+
+    def _fs_read(self, fd: int, p: int, n: int) -> int:
+        """The guest's read of its stdin when that is a host TERMINAL (the adapter asks; a pipe or file stays on WASI):
+        at most N bytes, as many as there are (a blocking os.read: one call, no read-ahead, so the terminal's own
+        queue stays the truth for poll and tcflush; wasmtime's stdin would keep what it read before the guest asked).
+        0 is the end of the input."""
+        if fd != 0:
+            return -WASI_ERRNO["BADF"]
+        data = os.read(0, min(n, 1 << 20))
+        self._wr(p, data)
+        return len(data)
 
     # The operations that call into the guest (a ctypes call, a callback, the trampoline) or fail on purpose as
     # JavaScript throws: their exceptions (a callee's trap, exit(), a TypeError) reach run(), which ends the guest.
@@ -875,7 +903,7 @@ class Pyodide:
             "error": (self._dl_error, ft(5, 0)),
         }
         net = self.net.ops(ft)
-        fs = {"statvfs": (self._fs_statvfs, ft(2))}
+        fs = {"statvfs": (self._fs_statvfs, ft(2)), "ioctl": (self._fs_ioctl, ft(3)), "read": (self._fs_read, ft(3))}
         return loader, net, fs
 
     # ------------------------------------------------------------------ start
@@ -1298,6 +1326,14 @@ class Pyodide:
             )
             self._exited = 134  # as for a trap
             rc = 134
+        except (
+            KeyboardInterrupt
+        ):  # Python's default SIGINT handler raised inside a host call (a read of the terminal): the
+            self._exited = rc = (
+                130  # guest was unwound in the middle of that call, so it is dead (not "alive and trapping")
+            )
+        finally:  # also for an exception that is none of those
+            _tty.restore(self._tty_saved)
         posted, self._sig_since_run = self._sig_posted or self._sig_since_run, False
         if self._sig_posted and self._exited is None:
             self._drop_late_signal()
@@ -1327,6 +1363,7 @@ class Pyodide:
         with self._sig_lock:  # before anything is freed: a writer in another thread then gets a RuntimeError
             self._sig = None
         self.net.close_all()
+        _tty.restore(self._tty_saved)
         self.slots.clear()
         self.instances = [None]
         if self.root is not None:

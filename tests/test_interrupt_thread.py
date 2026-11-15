@@ -82,6 +82,77 @@ def test_another_signal_runs_the_programs_handler(flavor: str, capfd: pytest.Cap
     assert capfd.readouterr().out.strip() == "handler ran [10]"
 
 
+def test_one_pending_signal_is_not_replaced_by_a_later_one_except_ctrl_c_wins(
+    flavor: str, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The cell holds one word: a pending SIGINT stays (a resize after Ctrl-C must not eat it), another pending signal
+    gives way only to SIGINT."""
+    probe = (
+        "got = []\ntry:\n    for i in range(10**6): pass\nexcept KeyboardInterrupt:\n    got.append('KI')\nprint(got)"
+    )
+    with Pyodide(flavor) as py:
+        assert (
+            py.run(
+                "import signal\nsignal.signal(28, lambda s, f: got.append(s))\n"
+                "signal.signal(10, lambda s, f: got.append(s))"
+            )
+            == 0
+        )
+        py.interrupt(2)
+        py.interrupt(28)
+        assert py.run(probe) == 0
+        py.interrupt(10)
+        py.interrupt(28)
+        assert py.run(probe) == 0
+        py.interrupt(10)
+        py.interrupt(2)
+        assert py.run(probe) == 0
+    assert capfd.readouterr().out.split("\n")[:3] == ["['KI']", "[10]", "['KI']"]
+
+
+def test_no_signal_is_lost_when_each_is_posted_after_the_last_was_taken(flavor: str) -> None:
+    """The guest looks at the signal word every few dozen bytecodes with nothing in it: its clear of the word must not
+    erase a post that arrives between its load and its store (it was a lost SIGWINCH about once in 1500 posts)."""
+    n = 2000
+    # the handler only counts: a slow one would have the next signal nest inside it, and the stack ends
+    prog = (
+        "import signal\ngot = 0\ndef h(s, f):\n    global got\n    got += 1\n"
+        f"signal.signal(10, h)\nopen('/ack', 'w').write('0')\nacked = 0\n"
+        f"while got < {n}:\n    if got != acked:\n        acked = got\n        open('/ack', 'w').write(str(got))\n"
+        "open('/ack', 'w').write(str(got))"
+    )
+    with Pyodide(flavor) as py:
+        assert py.run("pass") == 0
+        assert py.root is not None
+        ack = py.root / "ack"
+        lost: list[int] = []
+
+        def poster() -> None:
+            while not ack.exists() or not ack.read_text():  # the guest has armed its handler
+                time.sleep(0.001)
+            want = 0
+            for i in range(n):
+                py.interrupt(10)
+                t0 = time.perf_counter()
+                while time.perf_counter() - t0 < 30:  # a starved runner is slow, a lost post never comes
+                    try:
+                        if int(ack.read_text() or 0) > want:
+                            want += 1
+                            break
+                    except (OSError, ValueError):  # the guest is writing it
+                        pass
+                else:
+                    lost.append(i)
+                    py.interrupt(10)  # let the guest finish: it waits for n signals
+                    want += 1
+
+        t = threading.Thread(target=poster)
+        t.start()
+        assert py.run(prog) == 0
+        t.join()
+        assert lost == []
+
+
 def test_a_signal_between_runs_is_taken_by_the_next_run(flavor: str) -> None:
     with Pyodide(flavor) as py:
         assert py.run("pass") == 0

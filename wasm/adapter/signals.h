@@ -54,7 +54,8 @@ EXPORT("_Py_CheckEmscriptenSignals_Helper") i32 check_signals(void) {
         if (out[0] == 2 || out[0] == 3) ((void (*)(i32, double))slot)(which, now);  // 3: a slot made by this lookup
     }
     i32 v = (i32)s->cell;
-    s->cell = 0;
+    if (v) s->cell = 0;  // (not an unconditional store: a post between the load and that store of 0 would be lost, and this is
+                         // reached every few dozen bytecodes with nothing posted)
     return v;
 }
 

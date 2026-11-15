@@ -106,6 +106,13 @@ LOADER("cpuclock") i32 host_cpuclock(i32 id, i32 res, u64 *out);  // the host's 
 // writes Emscripten's statfs64 (88 bytes). The host is never given a path of the guest.
 #define FS(n) __attribute__((import_module("fs"), import_name(n)))
 FS("statvfs") i32 fs_statvfs(i32 preopen_fd, u8 *buf);
+// the host's standard descriptors (0, 1, 2: the guest never names another). ioctl: Linux's request number `op`, `argp` the
+// guest's address of the argument (TCFLSH: the value itself); the host knows the terminal's requests and answers ENOTTY
+// for the rest, and where its descriptor is no terminal (a pipe, a file) and on Windows -> 0, or -errno.
+FS("ioctl") i32 fs_ioctl(i32 host_fd, i32 op, u8 *argp);
+// read: up to `len` bytes of the host's descriptor into the guest's `p` -> the count (0: end of file), or -errno. Only for
+// stdin when it is a terminal (see stdin_read): the host's own read, one call, no read-ahead of ours or WASI's.
+FS("read") i32 fs_read(i32 host_fd, u8 *p, i32 len);
 
 static i32 is_sock(i32 fd);  // a socket descriptor (the sockets section, at the end)
 static i32 sock_nb(i32 fd);

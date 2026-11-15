@@ -15,6 +15,7 @@ from typing import Any
 from . import PYODIDE_ABI, PYODIDE_VERSION, __version__, _engine
 from ._host import FLAVORS, TESTENV_HINT, Pyodide
 
+GUEST_SIGWINCH = 28  # Linux's number, which the guest's libc has
 CWD_MOUNT = "/host"  # where --mount-cwd puts the host's current folder
 
 # The REPL's console lives in the guest (state between lines); the host reads the lines (readline, or prompt_toolkit
@@ -92,6 +93,10 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
     and posted right before the next program run."""
     _engine.engine()  # made here: the wasm stack is sized for the main thread, and the worker's stack is as big
     pending = False
+    # SIGWINCH (POSIX; the host's number, GUEST_SIGWINCH in the guest): the terminal was resized, the program's handler
+    # asks get_terminal_size(). Only while a program runs (not the start or the housekeeping), and, like SIGINT, it is
+    # taken by this thread and not by the worker.
+    winch = [signal.SIGWINCH] if hasattr(signal, "SIGWINCH") else []
 
     def call(fn: Callable[..., Any], *args: Any, program: bool = False) -> Any:
         nonlocal pending
@@ -99,7 +104,7 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
 
         def work() -> None:
             if hasattr(signal, "pthread_sigmask"):
-                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, *winch})
             try:
                 out.append(fn(*args))
             except BaseException as e:
@@ -115,6 +120,12 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
             except RuntimeError:  # gone
                 pending = True
 
+        def on_winch(signum: int, frame: Any) -> None:
+            try:  # the program's own handler reads the new size (a handler only: it runs on this, the main thread)
+                py.interrupt(GUEST_SIGWINCH)
+            except RuntimeError:  # gone
+                pass
+
         if program and pending:
             pending = False
             try:
@@ -123,8 +134,12 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
                 pass
         try:
             before = signal.signal(signal.SIGINT, on_sigint)
+            # not with readline loaded: its C SIGWINCH handler shows as SIG_DFL, and restoring that removes it
+            before_winch = (
+                signal.signal(winch[0], on_winch) if winch and program and "readline" not in sys.modules else None
+            )
         except ValueError:  # not the main thread (a caller of main()): no Ctrl-C handling
-            before = None
+            before = before_winch = None
         old = threading.stack_size(8 << 20)  # read by start(); the guest's wasm runs on this stack
         try:
             t = threading.Thread(target=work, daemon=True)
@@ -137,6 +152,8 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
         finally:
             if before is not None:
                 signal.signal(signal.SIGINT, before)
+            if before_winch is not None:
+                signal.signal(winch[0], before_winch)
         if isinstance(out[0], BaseException):
             raise out[0]
         return out[0]
