@@ -39,7 +39,7 @@ Python files of the guest (`src/pyodide_nojs/guest/`, 443 lines: `hostnet.py`, `
 
 ## 2. WASI
 
-The fused module has 72 imports: 33 `wasi_snapshot_preview1`, 20 `net`, 16 `loader`, 3 `fs` (measured). `proc_exit` is
+The fused module has 71 imports: 33 `wasi_snapshot_preview1`, 19 `net`, 16 `loader`, 3 `fs` (measured). `proc_exit` is
 imported twice (the main module's and the adapter's), so 32 distinct WASI functions.
 
 **Taken from wasmtime itself** (`Linker.define_wasi()`, no host code): all of them except `proc_exit`:
@@ -92,7 +92,7 @@ in `wasm/adapter/common.h` (`LOADER`, `FS`, `aux`) and `wasm/adapter/sockets.h` 
 | `loader.tzset` | `(iiii)->` | `timezone`, `daylight` and the std/dst names (`UTC-0200` form) | as `localtime` | as `localtime`: the formatting is movable; the offsets are the OS's |
 | `loader.cpuclock` | `(iii)->i` | `CLOCK_PROCESS_CPUTIME_ID` and `CLOCK_THREAD_CPUTIME_ID` in ns, or the resolution | the CPU time of the host process or thread, an OS fact; WASI preview1's `clock_time_get` is what the adapter forwards for the other clocks (what wasmtime answers for ids 2 and 3 was not checked here) | no |
 
-### 3.2 `net`: 20 imports (the host's sockets and DNS)
+### 3.2 `net`: 19 imports (the host's sockets and DNS)
 
 All of `net.*` are OS facts: a wasm module cannot create, connect, bind or poll a socket, and WASI preview1 has no socket
 creation or connect (only the adapter's descriptor layer makes them look like files). The adapter keeps the guest's
@@ -118,7 +118,6 @@ descriptor numbers, flags (`O_NONBLOCK`, `MSG_DONTWAIT`) and the table that dups
 | `net.getopt` | `(iiiii)->i` | `getsockopt` (Emscripten/musl numbers to the host's: `_sockaddr.option`) | OS; the option tables are logic | the fact: no; the tables of names/numbers are **movable** |
 | `net.setopt` | `(iiiii)->i` | `setsockopt` | OS; as `getopt` | as `getopt` |
 | `net.ioctl` | `(iii)->i` | `FIONREAD` (bytes a read would get; the size of the next datagram) | OS | no |
-| `net.resolve` | `(iii)->i` | host name to IPv4 (the `gethostbyname` path) | DNS is the OS's resolver | **weak**: `net.getaddrinfo` can answer it (one call, the first IPv4 result); `resolve` is a second path to the same OS fact. Candidate for removal (not tried) |
 | `net.getaddrinfo` | `(iiii)->i` | `getaddrinfo(node, service, hints)`; writes the guest's `addrinfo` list | DNS, `/etc/hosts`, `/etc/services` | the resolver call: no; the flag/hint translation and the result layout (`_sockaddr.resolve_addrinfo`) are logic, **movable** |
 | `net.getnameinfo` | `(iiiiiii)->i` | reverse lookup and service name | as `getaddrinfo` | as `getaddrinfo` (`_sockaddr.nameinfo`) |
 
@@ -151,7 +150,7 @@ and names to the guest in a file `_hostnet_slots.py` (`FETCH`, `FREE`); the gues
 | WASI of `pyodide.asm.wasm` | 14 | section 2 |
 
 All of these are wasm or engine plumbing in `_start`; nothing in the table is a new host function. The fused module has
-none of them: it has exactly the 72 imports of section 2 and 3.
+none of them: it has exactly the 71 imports of section 2 and 3.
 
 ## 4. Boot versus the long tail
 
@@ -162,7 +161,7 @@ Measured here (scripts in the scratchpad, `Pyodide(...).run(...)`, offline, both
 | CPython's start through `main()` and `print(1+1)` | **2 distinct**: `loader.localtime` (2 calls), `loader.tzset` (1) |
 | `import time, os, socket, ctypes, ssl, decimal`, bind/listen/`getsockname`/`getaddrinfo`/close on a loopback socket, `time.process_time()`, `os.statvfs("/")`, `ctypes.CDLL(None).abs(-3)` | those two, plus `net.socket`, `net.bind`, `net.listen`, `net.name`, `net.getaddrinfo`, `net.close`, `fs.statvfs`, `loader.cpuclock`, `loader.sym`, `loader.ffi_call`, `loader.ffi_slot`, `loader.ffi_free` |
 
-So at boot the host needs two of its 39 operations and the engine's WASI; everything else comes with a program.
+So at boot the host needs two of its 38 operations and the engine's WASI; everything else comes with a program.
 Not called in these runs, so not confirmed by a command here: `loader.instantiate`, `scope`, `got_set`, `call`, `error`,
 `depth`, `call_any`, `ffi_prep`, `net.accept`, `connect`, `sendto`, `recvfrom`, `sendmsg`, `recvmsg`, `poll`, `pollv`,
 `shutdown`, `getopt`, `setopt`, `ioctl`, `resolve`, `getnameinfo`, `fs.ioctl`, `fs.read`, `aux.table_grow`. The tests of
@@ -209,7 +208,7 @@ time zone, the CPU clocks, `statvfs`, the terminal (`fs.*`), `proc_exit`, and WA
 1. `loader.error` (texts and `__dl_seterr`; code 11's reason from `instantiate` stays).
 2. `loader.scope` (with `sym`).
 3. `loader.ffi_slot`, and half of `loader.ffi_free` (table grow and free list; `aux.table_grow` is already there).
-4. `net.resolve` (answered by `net.getaddrinfo`): weakest justification of any import.
+4. (`net.resolve` was removed on 2026-11-15: `_emscripten_lookup_name` now asks `net.getaddrinfo` for one IPv4 address.)
 5. `loader.call` (through a table slot from `sym`) and `loader.sym` (if `instantiate` returned the export list): both need a design, not tried.
 6. Not imports but their logic: the `cif` decoding, the socket tables, the calendar, the termios tables (section 5).
 

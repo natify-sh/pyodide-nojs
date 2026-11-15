@@ -96,7 +96,6 @@ class Net:
             "getopt": (self._n_getopt, ft(5)),
             "setopt": (self._n_setopt, ft(5)),
             "ioctl": (self._n_ioctl, ft(3)),
-            "resolve": (self._n_resolve, ft(3)),
             "getaddrinfo": (self._n_getaddrinfo, ft(4)),
             "getnameinfo": (self._n_getnameinfo, ft(7)),
         }
@@ -449,16 +448,6 @@ class Net:
         except OSError as e:
             return werr(e)
         self.guest.wr(argp, n.to_bytes(4, "little"))
-        return 0
-
-    def _n_resolve(self, np_: int, n: int, ap: int) -> int:
-        name = self.guest.rd(np_, n).decode()
-        try:
-            ip = socket.gethostbyname(name)
-        except OSError:
-            return -GUEST_ERRNO["NOENT"]
-        self._netlog.append(f"resolve {name} -> {ip}")
-        self.guest.wr(ap, socket.inet_aton(ip))
         return 0
 
     def _n_getaddrinfo(self, node_p: int, service_p: int, hint_p: int, out_p: int) -> int:

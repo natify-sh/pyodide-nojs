@@ -32,7 +32,6 @@ NET("name") i32 net_name(i32 h, i32 peer, u8 *sa, u32 *lenp);  // the local or p
 NET("getopt") i32 net_getopt(i32 h, i32 level, i32 opt, u8 *val, u32 *lenp);
 NET("setopt") i32 net_setopt(i32 h, i32 level, i32 opt, const u8 *val, u32 len);
 NET("ioctl") i32 net_ioctl(i32 h, i32 op, i32 *argp);  // FIONREAD
-NET("resolve") i32 net_resolve(const char *name, i32 n, u8 *addr4);  // -> 0, or -errno
 NET("getaddrinfo") i32 net_getaddrinfo(const char *node, const char *service, const i32 *hint, u32 *out);
 NET("getnameinfo") i32 net_getnameinfo(const u8 *sa, i32 salen, char *node, i32 nodelen, char *serv, i32 servlen, i32 flags);
 
@@ -214,12 +213,21 @@ static i32 do_poll(u8 *fds, i32 n, i32 timeout) {
 EXPORT("__syscall_poll") i32 sc_poll(u8 *fds, i32 n, i32 timeout) { return do_poll(fds, n, timeout); }
 EXPORT("__syscall_poll_nonblocking") i32 sc_poll_nb(u8 *fds, i32 n) { return do_poll(fds, n, 0); }
 
-// DNS, by the host. libc's gethostbyname has no way to fail through this call (Pyodide's JavaScript never fails: it
-// makes up an address): a name the host cannot resolve gives INADDR_NONE (255.255.255.255), which no connection reaches.
+// DNS, by the host, through getaddrinfo (the host has no other name lookup). libc's gethostbyname has no way to fail
+// through this call (Pyodide's JavaScript never fails: it makes up an address): a name the host cannot resolve gives
+// INADDR_NONE (255.255.255.255), which no connection reaches. The first IPv4 address of the list is the answer; the list
+// is one block whose first node's ai_addr is a block of its own (see net_getaddrinfo's host side): both are freed here.
 EXPORT("_emscripten_lookup_name") u32 lookup_name(const char *name) {
-    u8 a[4];
-    if (net_resolve(name, slen(name), a)) return 0xffffffffu;
-    return (u32)a[0] | ((u32)a[1] << 8) | ((u32)a[2] << 16) | ((u32)a[3] << 24);
+    i32 hint[8];  // (assigned, not initialised: an initializer would be a data section)
+    for (i32 k = 0; k < 8; k++) hint[k] = 0;
+    hint[1] = 2;  // AF_INET
+    u32 *ai = 0;
+    if (net_getaddrinfo(name, 0, hint, (u32 *)&ai) || !ai) return 0xffffffffu;
+    const u8 *sa = (const u8 *)ai[5];
+    u32 r = (u32)sa[4] | ((u32)sa[5] << 8) | ((u32)sa[6] << 16) | ((u32)sa[7] << 24);  // sockaddr_in: family, port, address
+    free((void *)sa);
+    free(ai);
+    return r;
 }
 
 // the whole list is one malloc'd block that freeaddrinfo (it frees the first node and its ai_addr) releases

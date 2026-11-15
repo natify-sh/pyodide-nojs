@@ -1833,7 +1833,7 @@
   "class": "runtime",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c lookup_name: the host resolves the IPv4 address (net.resolve). The libc caller (gethostbyname2_r, wasm func $17452 area) has NO failure path through this import: it stores the returned 4 bytes and reports success. Pyodide's JS never fails either (it makes up 172.29.x.x); ours returns INADDR_NONE (255.255.255.255) for a name the host can not resolve, which nothing connects to. socket.gethostbyname uses getaddrinfo and raises properly.",
+  "evidence": "adapter.c lookup_name: the host resolves the IPv4 address (net.getaddrinfo, first AF_INET result). The libc caller (gethostbyname2_r, wasm func $17452 area) has NO failure path through this import: it stores the returned 4 bytes and reports success. Pyodide's JS never fails either (it makes up 172.29.x.x); ours returns INADDR_NONE (255.255.255.255) for a name the host can not resolve, which nothing connects to. socket.gethostbyname uses getaddrinfo and raises properly.",
   "tested": "tests/test_sockets.py::test_names_services_protocols_and_reverse_lookups"
  },
  {

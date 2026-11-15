@@ -31,6 +31,6 @@ def test_every_host_operation_is_in_the_contract():
     text = DOC.read_text(encoding="utf-8")
     # the fused module (all of the host's operations in one place) and the dynamic build's adapter (`aux.table_grow`)
     wanted = host_imports("pyodide_fused.wasm") | host_imports("adapter.wasm")
-    assert len(wanted) >= 39  # the fused module's loader, net and fs imports (16 + 20 + 3) are never fewer
+    assert len(wanted) >= 38  # the fused module's loader, net and fs imports (16 + 19 + 3) are never fewer
     absent = sorted(n for n in wanted if f"`{n}`" not in text)
     assert not absent, f"not in docs/HOST_CONTRACT.md (add a row with the reason it is not wasm): {absent}"
