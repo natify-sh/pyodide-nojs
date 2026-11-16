@@ -50,7 +50,7 @@ $ pyodide-nojs --inherit-network --allow-top-level-await
 'OpenSSL 3.5.9 29 Sep 2026'
 >>> import micropip; await micropip.install("numpy")
 ```
-Command line flags (`pyodide-nojs -h` has the text): `-c CODE`, `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--venv DIR` (a virtual environment made by `pyodide venv`, checked for Python and ABI), `--mount GUEST=HOST`, `--mount-cwd` (the host's current folder at `/host`), `--env K=V`, `--inherit-env` (ALL the host's variables, secrets included), the network flags `--inherit-network --tcp --udp --dns --http --pyfetch` (default off), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL), `--asm-wasm FILE`, `--stdlib FILE`, `--data DIR` (other wasm files than the package's), `-v`/`--verbose` (log the loader and the network), `--version`.
+Command line (`pyodide-nojs -h` has the text): `pyodide-nojs [OPTIONS] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]`; `-m MODULE` runs a module as `__main__`, as `python -m` does (`sys.argv[0]` is the module's file, everything after MODULE is the module's, so the options of `pyodide-nojs` go before `-m`; after a script or `-c`, `-m` is an argument of that program). Options: `-c CODE`, `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--venv DIR` (a virtual environment made by `pyodide venv`, checked for Python and ABI), `--mount GUEST=HOST`, `--mount-cwd` (the host's current folder at `/host`), `--env K=V`, `--inherit-env` (ALL the host's variables, secrets included), the network flags `--inherit-network --tcp --udp --dns --http --pyfetch` (default off), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL), `--asm-wasm FILE`, `--stdlib FILE`, `--data DIR` (other wasm files than the package's), `-v`/`--verbose` (log the loader and the network), `--version`.
 
 ```python
 from pyodide_nojs import Pyodide
@@ -120,7 +120,7 @@ Pyodide's own packages (`numpy`...) are not on PyPI, so this way cannot install 
 
 Checked on both packagings: `six`, `numpy` 2.4.3 (Pyodide's own build, from the xbuildenv's package index: it is not on PyPI) and `py_ballisticcalc_exts` 3.1.1 (a native PyPI wheel) in a `pyodide venv`; `py_ballisticcalc_exts` through plain pip. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a venv that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS.
 
-Pyodide's own `python` command (a drop-in for the native one: `-c`, a file, `-m`; Node.js 20+, not sandboxed, from the `pyodide-core` release archive, `pyodide venv`, or `uv python install` of Pyodide's CPython with its package index) is the reference for what a command line should do. `pyodide-nojs` takes `-c` and a file and has no `-m` yet; it needs no Node, and the network and the host's files are closed unless granted.
+Pyodide's own `python` command (a drop-in for the native one: `-c`, a file, `-m`; Node.js 20+, not sandboxed, from the `pyodide-core` release archive, `pyodide venv`, or `uv python install` of Pyodide's CPython with its package index) is the reference for what a command line should do. `pyodide-nojs` takes the same three (`-c`, a file, `-m`); it needs no Node, and the network and the host's files are closed unless granted.
 
 ## Architecture
 ### The layers
@@ -289,7 +289,6 @@ Failures that appear are read from the junit files of the CI suite jobs (artifac
 What does not work, and what is deliberately different (the per-import list with the evidence is [docs/IMPORT_AUDIT.md](docs/IMPORT_AUDIT.md)):
 
 * **The JavaScript bridge is absent**: `js`, `pyodide_js`, `pyodide.ffi`, `JsProxy`/`PyProxy`, `loadPackage` from JS and `pyodide.http` outside `hostnet` do not work; the 169 `env` imports are zero/null stubs. Tests that need them are not applicable, not failures. Pyodide's own Python package (`pyodide/`, `_pyodide/`) is in the stdlib zip but the start does not run its JavaScript-side start-up code: 84 modules are loaded at start against Pyodide's 197 (`len(sys.modules)` in this package, `tests/boot_modules.py` for Pyodide's).
-* **No `-m`**: `pyodide-nojs` runs `-c CODE`, a file or stdin; `python -m module` (which Pyodide's own `python` command has) is not implemented.
 * **Lock entries of `package_type` other than `package`** (the shared libraries `libopenblas`, `libopenssl`, `test-cpp-exceptions`, `test-sharedlib`) raise `NotImplementedError` in `micropip`: they need Pyodide's JavaScript loader.
 * **Python 3.14 (Pyodide 314) is not supported**: tried through `--asm-wasm`/`--stdlib`: the start warnings are right and the run traps at boot with `indirect call type mismatch` (the signatures of `_gmtime_js`/`_localtime_js` differ between 314 and 315, likely cause, not proven; `PYVER` is fixed in the host). Nothing binds a stub for a signature mismatch yet.
 * **`emscripten_dlopen`'s callback** runs right after the call returns (a pending call), not after the current synchronous code as in Pyodide.

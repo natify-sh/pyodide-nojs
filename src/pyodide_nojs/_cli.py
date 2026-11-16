@@ -1,5 +1,5 @@
-"""pyodide-nojs [-c CODE | FILE] [ARGS...]: run Python in Pyodide on wasmtime; with no code, a REPL on a terminal or
-the script on stdin."""
+"""pyodide-nojs [-c CODE | FILE | -m MODULE] [ARGS...]: run Python in Pyodide on wasmtime; with no code, a REPL on a
+terminal or the script on stdin."""
 
 from __future__ import annotations
 
@@ -259,7 +259,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("-v", "--verbose", action="store_true", help="log the loader and the network to stderr")
     ap.add_argument("--version", action="store_true", help="print the versions and exit")
-    ns = ap.parse_args(argv)
+    ap.set_defaults(module=None)  # -m is cut out of the arguments in main() before argparse sees them
+    ap.usage = "pyodide-nojs [OPTIONS] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]"
+    args = sys.argv[1:] if argv is None else argv
+    rest: list[str] = []
+    if "-m" in args:  # argparse must not see what follows MODULE
+        i = args.index("-m")
+        head, tail = args[:i], args[i + 1 :]
+        before, _ = ap.parse_known_args(head)
+        if before.code is None and not before.file:  # no program before it: -m is the flag, as in CPython
+            args, rest = head, tail
+            if not rest:
+                ap.exit(2, "pyodide-nojs: error: -m: expected a module name\n")
+    ns = ap.parse_args(args)
+    if rest:
+        if ns.allow_top_level_await:
+            ap.exit(2, "pyodide-nojs: error: --allow-top-level-await does not apply to -m\n")
+        ns.module, rest = rest[0], rest[1:]
     if ns.version:
         print(f"pyodide-nojs {__version__} (Pyodide {PYODIDE_VERSION}, {PYODIDE_ABI})")
         return 0
@@ -292,7 +308,10 @@ def main(argv: list[str] | None = None) -> int:
         mounts[CWD_MOUNT] = os.getcwd()
     argv0: list[str] | None = None
     code: str | None
-    if ns.code is not None:
+    if ns.module is not None:
+        code = f"import runpy\nrunpy._run_module_as_main({ns.module!r}, alter_argv=True)\n"
+        argv0 = [ns.module, *rest]
+    elif ns.code is not None:
         code = ns.code
         argv0 = ["-c", *([ns.file] if ns.file else []), *ns.args]
     elif ns.file:

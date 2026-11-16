@@ -64,6 +64,8 @@ def _finish(err):
             if e3.errno != errno.EBADF:
                 raise
     for s in (sys.stdout, sys.stderr):  # a stream whose descriptor the program closed: Pyodide never flushes at the end
+        if s is None or getattr(s, "closed", False):  # a stream the program closed itself: CPython's shutdown skips it
+            continue
         try:
             s.flush()
         except OSError as e4:
