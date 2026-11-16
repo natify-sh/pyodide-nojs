@@ -390,11 +390,13 @@ def test_reverse_lookups(guest: Guest, port: int):
         guest,
         port,
         "print(socket.getnameinfo(('127.0.0.1', 80), 0)[1])\n"
-        "try: socket.getnameinfo(('10.255.255.1', 80), socket.NI_NAMEREQD)\n"
+        "try: socket.getnameinfo(('10.255.255.1', 80), socket.NI_NAMEREQD); print('NAMEREQD: named')\n"
         "except socket.gaierror as e: print('NAMEREQD:', e.errno)\n"
         "print(socket.gethostbyaddr('127.0.0.1')[2])\n",
     )
-    assert out == ["http", "NAMEREQD: -2", "['127.0.0.1']"]
+    # the resolver of the host decides whether a private address has a name (a CI runner's now answers one): either way
+    # NI_NAMEREQD is honoured, an error is -2 (EAI_NONAME)
+    assert out[0] == "http" and out[1] in ("NAMEREQD: -2", "NAMEREQD: named") and out[2] == "['127.0.0.1']", out
 
 
 def test_ipv6_structures_are_written_and_read_right(guest: Guest, port: int):

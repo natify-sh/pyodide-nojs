@@ -288,8 +288,9 @@ def test_mknod_under_dev_is_refused_like_every_create_and_fchdir_wants_a_directo
 assert libc.mknod(b'/dev/zz', 0o100600, 0) == 2 and err(os.open, '/dev/zz', os.O_CREAT | os.O_WRONLY) == 'EACCES'
 f = os.open('f', os.O_RDONLY)  # (mknod: libc returns the errno itself here, 2 is EACCES; 44, ENOENT, before)
 assert err(os.fchdir, f) == 'ENOTDIR'
-os.rename('f', 'g'); os.mkdir('f')  # the file's old path is a directory now (Pyodide goes there, Linux: ENOTDIR)
-assert err(os.fchdir, f) == 'ENOTDIR'
+if not WIN:  # (a Windows host cannot rename an open file)
+    os.rename('f', 'g'); os.mkdir('f')  # the file's old path is a directory now (Pyodide goes there, Linux: ENOTDIR)
+    assert err(os.fchdir, f) == 'ENOTDIR'
 os.chdir(W)
 """,
     )
