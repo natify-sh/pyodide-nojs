@@ -114,6 +114,25 @@ def test_missing_tls_folder_is_an_error(flavor: str, tmp_path: Path):
         Pyodide(flavor, data=data)
 
 
+def test_missing_py_folder_is_an_error(flavor: str, tmp_path: Path):
+    data = tmp_path / "data"
+    data.mkdir()
+    for f in data_dir().iterdir():
+        if f.name != "py":
+            (data / f.name).symlink_to(f.resolve())
+    with pytest.raises(FileNotFoundError, match=r"sh tools/build_data\.sh pyo-build"):
+        Pyodide(flavor, data=data)
+
+
+def test_snapshot_key_follows_the_bundled_py_files(flavor: str, tmp_path: Path):
+    data = tmp_path / "data"
+    shutil.copytree(data_dir(), data, symlinks=True)
+    before = Pyodide(flavor, data=data, preload="x = 1\n")._snapshot_path()
+    init = data / "py" / "micropip" / "__init__.py"
+    init.write_text(init.read_text() + "\n# changed\n")
+    assert Pyodide(flavor, data=data, preload="x = 1\n")._snapshot_path() != before
+
+
 @pytest.mark.network
 def test_https_to_pypi(guest: Guest):
     p = guest.run(check_file("tls_check.py"))

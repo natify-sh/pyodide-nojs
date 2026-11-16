@@ -12,6 +12,10 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
   are in the public domain and have no text).
 * pyodide-lock.json: the package lock of the same Pyodide release (MPL-2.0, as above; JSON data, unchanged), from the
   release's files (npm `pyodide` 315.0.0-alpha.2, tools/fetch.sh).
+* data/py/ (micropip 0.11.1 and packaging 26.1, unpacked unchanged from the wheels of the same Pyodide release, whose sha256 are checked
+  against the lock by tools/bundle_py.py): micropip is MPL-2.0 (its LICENSE is the same text as Pyodide-LICENSE-MPL-2.0.txt; micropip also
+  vendors a copy of packaging under micropip/_vendored/packaging); packaging is Apache-2.0 OR BSD-2-Clause (packaging-LICENSE-Apache-2.0.txt,
+  packaging-LICENSE-BSD-2-Clause.txt, from the wheel's dist-info/licenses). Source: https://github.com/pyodide/micropip, https://github.com/pypa/packaging
 * wasm-opt.wasm: Binaryen version_132 built for wasm32-wasip1 with wasi-sdk 34 (tools/build_binaryen.sh), Apache-2.0
   (Binaryen-LICENSE-Apache-2.0.txt). It statically contains wasi-libc (MIT / Apache-2.0 with LLVM exceptions / CC0 /
   BSD-2-Clause for cloudlibc), libc++, libc++abi and libunwind of wasi-sdk (Apache-2.0 with LLVM exceptions, and the dual

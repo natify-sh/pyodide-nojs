@@ -48,6 +48,9 @@ jobs:
       - name: The wheel carries the guest's TLS
         run: python3 -m zipfile -l dist/*.whl | grep -E 'data/tls/(_ssl\.cpython-315-wasm32-emscripten\.so|ssl\.py)' | wc -l | grep -qx 2
 
+      - name: The wheel carries micropip and packaging
+        run: python3 -m zipfile -l dist/*.whl | grep -E 'data/py/(micropip/__init__\.py|packaging/__init__\.py|micropip-0\.11\.1\.dist-info/METADATA)' | wc -l | grep -qx 3
+
       - name: Smoke-test the wheel in a clean environment, both builds
         run: |
           uv venv -q /tmp/smoke

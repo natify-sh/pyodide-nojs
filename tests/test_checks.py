@@ -7,6 +7,8 @@ import hashlib
 import http.server
 import io
 import re
+import subprocess
+import sys
 import threading
 import zipfile
 from pathlib import Path
@@ -15,14 +17,14 @@ import pytest
 from conftest import Guest, check_file
 
 
-def exact(guest: Guest, script: str, site: str, expected: str, *args: str):
+def exact(guest: Guest, script: str, site: str | None, expected: str, *args: str):
     p = guest.run(check_file(script), site, *args)
     assert p.returncode == 0, p.stderr[-2000:]
     assert p.stdout.splitlines() == check_file(expected).splitlines()
     return p
 
 
-def lines(guest: Guest, code: str, site: str, patterns: list[str], *args: str):
+def lines(guest: Guest, code: str, site: str | None, patterns: list[str], *args: str):
     p = guest.run(code, site, *args)
     assert p.returncode == 0, p.stderr[-2000:]
     for pat in patterns:
@@ -70,12 +72,12 @@ hostnet.run(micropip.install("https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/n
 
 @pytest.mark.network
 def test_net_through_the_hosts_fetch(guest: Guest):
-    lines(guest, check_file("net_check.py"), "site_net", NET)
+    lines(guest, check_file("net_check.py"), None, NET)
 
 
 @pytest.mark.network
 def test_the_guests_own_tls(guest: Guest):
-    lines(guest, check_file("tls_check.py"), "site_tls", TLS)
+    lines(guest, check_file("tls_check.py"), None, TLS)
 
 
 @pytest.mark.network
@@ -83,19 +85,19 @@ def test_micropip_over_the_guests_tls(guest: Guest):
     lines(
         guest,
         check_file("tls_micropip.py"),
-        "site_tls",
+        None,
         [r"^micropip over guest TLS: six \S+ \| requests\.get 200 micropip$"],
     )
 
 
 @pytest.mark.network
 def test_the_guest_refuses_a_certificate_with_no_ca(guest: Guest):
-    lines(guest, REFUSE, "site_tls", [r"^refused: "])
+    lines(guest, REFUSE, None, [r"^refused: "])
 
 
 @pytest.mark.network
 def test_numpy_wheel_from_the_cdn_is_converted_at_dlopen(guest: Guest):
-    p = guest.run(NUMPY_WHEEL + check_file("numpy_check.py"), "site_net")
+    p = guest.run(NUMPY_WHEEL + check_file("numpy_check.py"), None)
     assert p.returncode == 0, p.stderr[-2000:]
     assert p.stdout.splitlines() == check_file("numpy_check.expected").splitlines()
     assert p.stderr.count("[loader] converted legacy exceptions") >= 2
@@ -191,7 +193,7 @@ def test_micropip_finds_a_package_of_the_lock(guest: Guest, tmp_path):
         lines(
             guest,
             LOCK_GUEST % (entries, port),
-            "site_net",
+            None,
             [r"^lock 2026_5 31 2\.4\.3$", r"^installed 42 pyodide$"],
         )
 
@@ -199,7 +201,7 @@ def test_micropip_finds_a_package_of_the_lock(guest: Guest, tmp_path):
 def test_lock_packages_come_dependencies_first_once_and_never_over_an_installed_one(guest: Guest, tmp_path):
     deps = {"a": ["b", "c"], "b": ["c"], "c": [], "cyc1": ["cyc2"], "cyc2": ["cyc1"], "preinst": []}
     with lock_server(tmp_path, deps) as (port, hits, entries):
-        lines(guest, LOCK_ORDER % (entries, port), "site_net", [r"^preinst ORIG$"])
+        lines(guest, LOCK_ORDER % (entries, port), None, [r"^preinst ORIG$"])
     # a needs b and c, b needs c: c, b, a; the second call fetches nothing; a cycle ends; preinst is not fetched
     assert hits == [f"/{n}-1.0-py3-none-any.whl" for n in ("c", "b", "a", "cyc2", "cyc1")]
 
@@ -210,7 +212,7 @@ def test_a_failed_hook_fails_the_import_every_time(guest: Guest):
         "for i in range(2):\n"
         "    try:\n        import micropip\n    except FileNotFoundError:\n        print('failed', i)\n"
     )
-    lines(guest, code, "site_net", [r"^failed 0$", r"^failed 1$"])
+    lines(guest, code, None, [r"^failed 0$", r"^failed 1$"])
 
 
 def test_the_lock_base_is_the_pinned_release():
@@ -236,8 +238,51 @@ def test_micropip_installs_numpy_from_pyodides_lock(guest: Guest):
         "import numpy\nprint('numpy', numpy.__version__, numpy.arange(3).sum())\n"
         "asyncio.run(micropip.install('scipy'))\n"
         "import scipy.linalg\nprint('scipy', scipy.linalg.det([[1, 2], [3, 4]]))\n",
-        "site_net",
     )
     assert p.returncode == 0, p.stderr[-2000:]
     assert re.search(r"^numpy 2\.4\.3 3$", p.stdout, re.M), p.stdout
     assert re.search(r"^scipy -2\.0$", p.stdout, re.M), p.stdout
+
+
+BUNDLED = """
+import importlib.metadata as md
+import micropip, packaging
+print("micropip", micropip.__version__, md.version("micropip"), md.version("packaging"))
+print("hook", micropip._compat.LOCKFILE_INFO["abi_version"], micropip._compat.LOCKFILE_PACKAGES["numpy"]["version"])
+print("list", sorted(micropip.list()))
+"""
+
+
+def test_micropip_is_bundled_with_no_site(guest: Guest):
+    """`import micropip` needs no `site=`: data/py has it (with packaging), and our lock hook applies."""
+    lines(
+        guest,
+        BUNDLED,
+        None,
+        [r"^micropip 0\.11\.1 0\.11\.1 26\.1$", r"^hook 2026_5 2\.4\.3$", r"^list \[\]$"],
+    )
+
+
+def test_a_site_micropip_wins_over_the_bundled_one(guest: Guest, tmp_path):
+    (tmp_path / "micropip").mkdir()
+    (tmp_path / "micropip" / "__init__.py").write_text("__version__ = 'site'\n_compat = None\n")
+    p = subprocess.run(
+        [sys.executable, "-m", "pyodide_nojs", "--flavor", guest.flavor, "--site", str(tmp_path)]
+        + ["-c", "import micropip; print('v', micropip.__version__)"],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+    )
+    assert p.returncode == 0, p.stderr[-2000:]
+    assert p.stdout.splitlines() == ["v site"]
+
+
+@pytest.mark.network
+def test_micropip_installs_from_pypi_with_no_site(guest: Guest):
+    lines(
+        guest,
+        "import hostnet\nhostnet.install()\nimport micropip, asyncio\nasyncio.run(micropip.install('six'))\n"
+        "import six\nprint('six', six.__version__)\n",
+        None,
+        [r"^six \d+\.\d+"],
+    )
