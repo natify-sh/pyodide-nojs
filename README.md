@@ -6,7 +6,7 @@
 
 - [What it is and why](#what-it-is-and-why)
 - [Quick start](#quick-start)
-  - [Installing packages of your own](#installing-packages-of-your-own)
+- [Using packages](#using-packages)
 - [Architecture](#architecture)
   - [The layers](#the-layers)
   - [The two packagings, CLI and API](#the-two-packagings-cli-and-api)
@@ -63,25 +63,62 @@ with Pyodide() as py:  # "dynamic" by default; Pyodide("fused") or $PYODIDE_NOJS
 
 Other Pyodide files can be tried on the dynamic build: `Pyodide("dynamic", asm_wasm="pyodide.asm.wasm", stdlib="python_stdlib.zip")` (either one; the adapter and `wasm-opt.wasm` stay the package's), `--asm-wasm`/`--stdlib`, or `$PYODIDE_NOJS_ASM_WASM`/`$PYODIDE_NOJS_STDLIB`. They imply `dynamic` (`fused` with them is an error: the fused module is built for one Pyodide). A raw `pyodide.asm.wasm` from the npm package (legacy exceptions) is converted once by `wasm-opt.wasm` and cached. At start a warning on stderr says what is not the pinned build's (CPython's version string, an `env` import the adapter does not know (`-v` lists them), a missing `setsockopt` patch, a stdlib zip of another Python). Only the pinned build is tested.
 
-### Installing packages of your own
-`micropip` (above) installs into the guest's temporary root, so what it installs is gone when the run ends. For packages that stay there are two ways, both on the host, and neither needs `pyodide-build` to run the packages:
+## Using packages
+Pick by what you want:
 
-**Plain pip (pip 26 or newer; any host Python; no Node).** Wheels for Pyodide's platform that PyPI hosts (PEP 783, tag `pyemscripten_2026_5_wasm32`) install into a folder, which `--site` then copies into the guest:
+| you want | do |
+|---|---|
+| to try a package once | `await micropip.install("numpy")` in the REPL ([below](#try-a-package-in-the-repl-nothing-is-kept)) |
+| Pyodide's own packages (`numpy`, `scipy`, `cffi`...) kept between runs | a venv made by `pyodide venv`, then `--venv` ([below](#keep-packages-between-runs-a-pyodide-venv)) |
+| PyPI wheels built for Pyodide, kept, with no Node | plain `pip install --target`, then `--site` ([below](#without-pyodide-build-plain-pip)) |
+| your own files or folders | `--site DIR` (copied into the guest's site-packages) or `--mount GUEST=HOST` |
+
+### Try a package in the REPL (nothing is kept)
+```text
+$ pyodide-nojs --inherit-network --allow-top-level-await
+>>> import micropip
+>>> await micropip.install("numpy")        # Pyodide's own build, from its lock: about 10.7 MB from jsDelivr
+>>> import numpy; numpy.arange(5).sum()
+np.int32(10)
+```
+`--inherit-network` lets the guest open sockets and resolve names (see [Network and fetch](#network-and-fetch)); `--allow-top-level-await` allows `await` at the prompt. What `micropip` installs lives in the guest's temporary root and is gone when the run ends, so the next run downloads it again.
+
+### Keep packages between runs: a `pyodide venv`
+`pyodide venv` (from `pyodide-build`) makes a virtual environment for exactly this Pyodide and a `pip` that installs wheels for it, including Pyodide's own `numpy`. It needs Node.js and a host Python 3.15, only for making the venv and installing; running the packages needs neither.
+```sh
+pip install pyodide-build==0.39.3        # this version pairs with the pinned Pyodide; do not use another
+                                         # (or: pip install 'pyodide-nojs[venv]', which asks for exactly that version; Python 3.12+)
+pyodide venv .venv-pyodide               # fetches the matching cross-build environment itself: a venv for Python 3.15
+.venv-pyodide/bin/pip install numpy requests          # the venv's own pip (Windows: .venv-pyodide\Scripts\pip)
+pyodide-nojs --venv .venv-pyodide --inherit-network --allow-top-level-await
+```
+```text
+>>> import numpy, requests
+>>> numpy.arange(5).sum()
+np.int32(10)
+```
+`--venv DIR` (API: `Pyodide(venv=DIR)`) is the venv's **root**; it finds the site-packages itself and copies it into the guest at every start (a big venv slows the start: keep only what you need). It checks the venv: a venv of another Python is an error, a package built for another Python or Pyodide is a warning that names it (pure-Python packages work anywhere). Packages with C code (`numpy`) load through the same `dlopen` as in Pyodide.
+
+### Without pyodide-build: plain pip
+Wheels for Pyodide's platform that PyPI hosts (PEP 783, tag `pyemscripten_2026_5_wasm32`) install into a folder with pip 26 or newer, on any host Python and with no Node; `--site` then copies the folder into the guest:
 ```sh
 pip install --target pkgs --platform pyemscripten_2026_5_wasm32 --python-version 3.15 --implementation cp --abi cp315 \
     --only-binary=:all: py_ballisticcalc.exts py_ballisticcalc
 pyodide-nojs --site pkgs -c "import py_ballisticcalc_exts, py_ballisticcalc; print(py_ballisticcalc.__version__)"
 ```
-Checked with pip 26.3 on both packagings (`py_ballisticcalc_exts` 3.1.1, a native wheel, imports). Pyodide's **own** packages (`numpy`, `scipy`, `cffi` ...) are not on PyPI: install them in the guest with `micropip` (from the lock, section below), or with a pip that has Pyodide's package index (what `pyodide venv` sets up).
+Pyodide's own packages (`numpy`...) are not on PyPI, so this way cannot install them: use `micropip` or a `pyodide venv`.
 
-**`pyodide venv`** (from `pyodide-build`: it needs Node.js and a host Python 3.15, only to make the venv) gives a virtual environment whose `pip` is patched for Pyodide's platform and has Pyodide's own index, so it also installs `numpy`:
-```sh
-pip install pyodide-build==0.39.3        # the version that pairs with the pinned Pyodide (as tools/build_ssl.sh uses it, in a Python 3.15)
-pyodide venv .venv-pyodide               # fetches the matching cross-build environment itself and makes a venv for Python 3.15
-.venv-pyodide/bin/pip install numpy six
-pyodide-nojs --venv .venv-pyodide -c "import numpy; print(numpy.__version__)"
-```
-Install with the venv's own `pip` (`.venv-pyodide/bin/pip`), not with `uv pip install --python .venv-pyodide/bin/python`: `uv` does not read the venv's `pip.conf` (`only-binary` and the index of Pyodide's own packages), so for `numpy` it takes the source distribution from PyPI and fails to build it ("emscripten does not support processes"). `--venv DIR` (or `Pyodide(venv=...)`) finds the venv's site-packages itself and checks the venv: a venv of another Python (`pyvenv.cfg`) is an error, and a wheel built for another Python or Pyodide (it will not load) is a warning that names it; pure-Python wheels work. `--site DIR` stays for any folder of your own. Checked on both packagings with `six` 1.17.0, `numpy` 2.4.3 (Pyodide's own build, from the xbuildenv's package index: it is not on PyPI) and `py_ballisticcalc_exts` 3.1.1. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a folder that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS. `--site` copies the whole folder, including a venv's `pip` (13 MB) and `__pycache__`. `uv` cannot make a venv for this Pyodide yet (it knows only the Pyodide of Python 3.14); a venv of 3.14 is refused by `--venv`.
+### When it does not work
+| what you see | why | what to do |
+|---|---|---|
+| `ModuleNotFoundError` after `--site DIR` | DIR is the venv's root, or an empty folder: `--site` copies a folder as it is | `--venv .venv-pyodide`, or `--site .venv-pyodide/lib/python3.15/site-packages` |
+| `--venv: the virtual environment is for Python 3.14` | the venv was made for another Pyodide (for example with `uv`: it knows only the Pyodide of Python 3.14) | make it with `pyodide venv` of `pyodide-build==0.39.3` |
+| `emscripten does not support processes` while installing `numpy` with `uv pip install --python .venv-pyodide/bin/python` | `uv` does not read the venv's `pip.conf` (only-binary and the index of Pyodide's own packages), so it builds `numpy` from source | use `.venv-pyodide/bin/pip install numpy` |
+| `unrecognized arguments: --venv` | an older checkout | update the repository or the wheel |
+| a warning "holds packages built for another Python or Pyodide" | wheels of another ABI (for instance `numpy` of Pyodide 314) | install them again with the venv's own `pip` |
+| `PermissionError` or `gaierror -4` while `micropip` installs | the network is off by default | add `--inherit-network` |
+
+Checked on both packagings: `six`, `numpy` 2.4.3 (Pyodide's own build, from the xbuildenv's package index: it is not on PyPI) and `py_ballisticcalc_exts` 3.1.1 (a native PyPI wheel) in a `pyodide venv`; `py_ballisticcalc_exts` through plain pip. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a venv that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS.
 
 Pyodide's own `python` command (a drop-in for the native one: `-c`, a file, `-m`; Node.js 20+, not sandboxed, from the `pyodide-core` release archive, `pyodide venv`, or `uv python install` of Pyodide's CPython with its package index) is the reference for what a command line should do. `pyodide-nojs` takes `-c` and a file and has no `-m` yet; it needs no Node, and the network and the host's files are closed unless granted.
 

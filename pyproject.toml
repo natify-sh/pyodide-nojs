@@ -40,6 +40,9 @@ pyodide-nojs = "pyodide_nojs._cli:main"
 wasmtime = ["wasmtime>=50.0.1"]
 # optional: a nicer REPL (history, editing, multi-line paste); without it the REPL uses input()
 repl = ["prompt_toolkit>=3.0"]
+# optional: the `pyodide` command that makes a virtual environment for packages that stay (README: Using packages).
+# Only this version pairs with the pinned Pyodide; it needs Python 3.12+ and, to run, Node.js (making the venv only).
+venv = ["pyodide-build==0.39.3; python_version >= '3.12'"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
