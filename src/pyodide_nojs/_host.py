@@ -121,7 +121,8 @@ class Pyodide:
     (``$PYODIDE_NOJS_SNAPSHOT=0`` turns that off). The preload must only import and compute: it must not print (it
     prints at snapshot time only); opening files or sockets, ``chdir``, writing files, ``dlopen``, ``ctypes`` symbol
     lookups or callbacks, and signals or timers make the snapshot be skipped (a normal start,
-    the preload run once); with ``site=`` or ``mounts=`` or ``inherit_env`` there is no snapshot at all.
+    the preload run once); with ``site=``, ``venv=`` (one more site folder), ``mounts=`` (also the CLI's
+    ``--mount-cwd``) or ``inherit_env`` there is no snapshot at all.
     """
 
     def __init__(

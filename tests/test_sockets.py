@@ -676,9 +676,7 @@ def seq():
 """
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="no select.poll there; Winsock's own error order is unchecked (BACKLOG 7)"
-)
+@pytest.mark.skipif(sys.platform == "win32", reason="no select.poll there; Winsock's own error order is unchecked")
 def test_a_refused_non_blocking_connect_reports_its_error_once(guest: Guest, port: int):
     """send and recv after the refused connect give the error once and clear it, as Linux does (the guest has Linux's
     semantics whatever the host is: macOS's own kernel gives EPIPE to the first send and ECONNREFUSED to recv)."""

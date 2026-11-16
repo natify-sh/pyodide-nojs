@@ -23,27 +23,28 @@ verdicts are in [IMPORT_AUDIT.md](IMPORT_AUDIT.md). Errno names are Linux's (the
 | `os.get_blocking(0..2)`, `os.utime('')` | `False`; takes `''` as a descriptor | `True`; `ENOENT` | none |
 | `getservbyname('http')` | "service/proto not found" | 80 (the host's `/etc/services`) | none |
 | the CPU clocks (`time.process_time()`, `clock_gettime(2/3)`) | the monotonic clock | the host's CPU time | `tests/test_diff_fixes.py::test_cpu_time_clocks_are_the_hosts` |
-| a pipe whose writers are all closed | `EAGAIN` | end of file (`b''`); a write with no reader still succeeds, `EPIPE` as on Linux is for after the alpha | `tests/test_descriptors.py::test_end_of_file_is_zero_bytes_unlike_pyodide` |
+| a pipe whose writers are all closed | `EAGAIN` | end of file (`b''`); a write with no reader still succeeds, `EPIPE` as on Linux is planned for later | `tests/test_descriptors.py::test_end_of_file_is_zero_bytes_unlike_pyodide` |
 | the descriptor numbers | the first `open()` is 3, `dup2` below 4096 | the same; `F_DUPFD` with a minimum of 4096 or more is `EINVAL`, the last number is 4095 | `tests/test_descriptors.py::test_numbers_start_at_3_and_every_new_one_is_the_lowest_free` |
 | `close(1)` | `print` still works | the guest's own writes are `EBADF`, the runtime's messages still go out | `tests/test_dev.py::test_closing_the_last_number_of_stdout_leaves_the_stream_for_the_devices` |
 
-Pyodide's defects are not copied: that is a decision of this project for the alpha.
+Pyodide's defects are not copied: chosen on purpose.
 
 ## Deliberate: what the guest is
 
 | what | here | why |
 |---|---|---|
-| the root is a folder on the host's disk | host values for `st_nlink` of a directory, `st_blocks`, `st_dev`, the order of `listdir`, permission bits of files the host made; names are the host's (256 bytes, UTF-8: a non-UTF-8 name is `EILSEQ`, a 4096-byte link target `ENAMETOOLONG`) | WASI files; an in-memory root was costed and parked |
+| the root is a folder on the host's disk | host values for `st_nlink` of a directory, `st_blocks`, `st_dev`, the order of `listdir`, permission bits of files the host made; names are the host's (256 bytes, UTF-8: a non-UTF-8 name is `EILSEQ`, a 4096-byte link target `ENAMETOOLONG`) | WASI files; an in-memory root was estimated and is not done |
 | `mknod` of a FIFO, device or socket | `ENOSYS` | WASI cannot create them |
 | `utimensat` outside 1970..2554 | `EINVAL` | WASI's nanoseconds are an unsigned 64-bit number |
 | a symlink between two preopens (a `--mount` and the root) | `EXDEV`; on Windows a link target is looked up from the preopen's root | wasmtime's capability sandbox |
 | a name removed or renamed while `scandir` runs | still listed (Linux with glibc lists it too) | the listing is a snapshot |
 | `/dev` and `/proc` | the adapter's virtual tree (`/dev/{null,tty,tty1,random,urandom,shm,stdin,stdout,stderr}`, `/proc/self/fd`), read-only: creating or removing anything is `EACCES`; `/dev/shm` is empty; a mount at or below them is refused; a symlink in the root that points into them is `ENOENT`; `/dev/../tmp` is `ENOENT` | the same on every OS with no help from the host; `tests/test_dev.py` |
+| `sys.path` | site-packages is searched before the standard library's zip (so that the real `ssl.py` shadows the stub that lives in the zip); a module of site-packages with a standard-library name shadows the standard one (a wheel that ships `ssl.py` or `json.py` would win) | the real `_ssl` and `ssl.py` must win over Pyodide's stub; `tests/test_review_fixes.py::test_startup_state_is_pyodides` |
 | the environment | Pyodide's minimal one plus `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`; nothing of the host's unless `--inherit-env` | the real `_ssl` finds the CA bundle only through them |
 | sockets, DNS, the terminal, the time zone, entropy | the host's own (a real terminal when there is one: Pyodide on Node has a fake one) | Pyodide on Node has no sockets; the reference is Linux, and on macOS and Windows what a native Python does there |
 | `system()` | `ENOSYS` (a shell of the host would be a way out of the sandbox); the 3 `epoll` calls are `ENOSYS` as in Pyodide | |
 | no JavaScript | `js`, `pyodide.ffi`, `JsProxy`/`PyProxy`, `loadPackage` from JS do not exist; the 169 bridge and hook imports are zero/null stubs, hidden from `dlsym` and the GOT | the bridge needs JavaScript |
-| `emscripten_dlopen`'s callback | runs right after the call returns, not on the event loop | a decision of this project; the alternative is in `BRIEF.md` |
+| `emscripten_dlopen`'s callback | runs right after the call returns, not on the event loop | chosen on purpose; the alternative is in `BRIEF.md` |
 | `sys.executable`, `len(sys.modules)` at start | `/home/pyodide/this.program` as in the browser (on Node it is a script path); 84 modules against Pyodide's 197 | no JavaScript start-up code |
 
 ## Open
@@ -58,7 +59,7 @@ Pyodide's defects are not copied: that is a decision of this project for the alp
 | a file copied with its times (`shutil.copy2`) | the time is truncated to microseconds, so the copy can differ from the source in the nanoseconds; the tests that compare them are skipped in `tests/suite_overrides.yaml` | milliseconds everywhere: never differs |
 | `emscripten_resize_heap(0 or 1)` after growing to the maximum | 1 | 0 |
 | a timer (`alarm`, `setitimer`) in a busy Python loop | fires | never fires |
-| texts of `dlerror` and of the engine (`CompileError`, `LinkError`) | wasmtime's | V8's |
+| the engine's own texts: compile errors and traps (the `dlerror` text of a failed link is built in V8's wording and is Pyodide's) | wasmtime's | V8's |
 | `listdir` of 5,000 names | 0.13 s | 0.005 s |
 | `access(f, X_OK)` on a plain file | `EACCES` | ok |
 | `/home` | `pyodide` only | `pyodide` and `web_user` |

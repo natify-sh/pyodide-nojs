@@ -1,6 +1,6 @@
 # The host contract: what a host must provide
 
-The aim (CLAUDE.md, "The host stays thin"): a full Pyodide with the least from the host. This file lists everything the
+The aim, as the project's rule puts it (new logic goes into the adapter unless it needs an engine primitive or an OS fact): a full Pyodide with the least from the host. This file lists everything the
 host provides to run the adapter and Pyodide's CPython, and for each item why it is not done in wasm. It is held to the
 built wasm by `tests/test_host_contract.py`: every `loader`, `net`, `fs` and `aux` import of `pyodide_fused.wasm` and
 `adapter.wasm` must appear here as `` `module.name` ``, so a new host operation without a row fails the test.
@@ -37,7 +37,7 @@ How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the
 | `tls/` | both | the guest's real `_ssl` (OpenSSL 3.5.9) and CPython's `ssl.py`, copied into the guest's site-packages (`tools/build_ssl.sh`); a missing folder is a `FileNotFoundError` |
 | `py/` | both | `micropip` and `packaging`, copied into the guest's site-packages (`tools/build_data.sh`); a missing folder is a `FileNotFoundError` |
 
-Python files of the guest (`src/pyodide_nojs/guest/`, 660 lines by `wc -l` of 2026-11-16: `hostnet.py`, `pyodide_lock.py`, `pyodide_nojs_asyncio.py`, start and run, and the `.pth`) run inside the guest.
+Python files of the guest (`src/pyodide_nojs/guest/`, about 620 lines by `wc -l src/pyodide_nojs/guest/*` of 2026-11-16: `hostnet.py`, `pyodide_lock.py`, `pyodide_nojs_asyncio.py`, start and run, and the `.pth`) run inside the guest.
 
 ## 2. WASI
 
@@ -82,9 +82,9 @@ in `wasm/adapter/common.h` (`LOADER`, `FS`, `aux`) and `wasm/adapter/sockets.h` 
 | `loader.sym` | `(iiii)->i` | the export `name` of module id: a global's value, or a table slot (the slot the function already had, or a new one) | the host keeps each instance's exports by name; reading an export is `Instance.exports` | no, while the host keeps the instances. If `instantiate` returned the export list (name, kind, index) once, `dlsym` would be a lookup in the adapter's own table: movable at the cost of a bulk transfer per load (not tried) |
 | `loader.call` | `(iii)->i` | call export `name` (no arguments) of module id if it exists: `__wasm_call_ctors`, `__wasm_apply_data_relocs`, the init functions | an export of another instance is reachable only through the host's `Instance` | movable if `sym` gave the table slot: `call_indirect` of that slot would do (weak justification; not tried) |
 | `loader.scope` | `(ii)->` | the module's exports join the global namespace (scope 0) or one `dlopen` call's scope | pure bookkeeping of the host's `instances`/`scopes` lists | **movable**: a registry of ids per scope; it is host-side only because `sym` searches there. Moves with `sym` |
-| `loader.error` | `(iiiii)->` | set `dlerror`'s text from a failure code, the library name and one argument (V8's `LinkError`/`CompileError` wording), through the main module's `__dl_seterr` | none for the text; the engine's reason for a failed `instantiate` (`Module` compile or link message) is an engine fact | **movable**: every text but code 11 is a table of strings and a call into `__dl_seterr`, both wasm; code 11 would be the message `instantiate` kept (the thin-host item of `BACKLOG.md`) |
+| `loader.error` | `(iiiii)->` | set `dlerror`'s text from a failure code, the library name and one argument (the text of a failed link is built in V8's wording; compile errors and traps carry wasmtime's text), through the main module's `__dl_seterr` | none for the text; the engine's reason for a failed `instantiate` (`Module` compile or link message) is an engine fact | **movable**: every text but code 11 is a table of strings and a call into `__dl_seterr`, both wasm; code 11 would be the message `instantiate` kept |
 | `loader.depth` | `()->i` | how many NEEDED libraries may nest | the wasm stack in force is the engine's (`max_wasm_stack`, `depth_cap`) | no: a fact of the engine configuration (a constant would be wrong on a host with another stack) |
-| `loader.ffi_call` | `(iiii)->` | libffi's `ffi_call`: read the `cif`, call the function with the callee's real wasm type | a call whose signature is known only at run time needs a function of that type: JavaScript's `wasmTable.get(fn)(...args)`; wasm has `call_indirect` with a compile-time type only | no for the call; the decoding of the `cif` (`_cif.py`) is pure logic and **movable**, at the price of an ffi call that now costs 59 us (a callback 168 us) |
+| `loader.ffi_call` | `(iiii)->` | libffi's `ffi_call`: read the `cif`, call the function with the callee's real wasm type | a call whose signature is known only at run time needs a function of that type: JavaScript's `wasmTable.get(fn)(...args)`; wasm has `call_indirect` with a compile-time type only | no for the call; the decoding of the `cif` (`_cif.py`) is pure logic and **movable**, at the price of a slower ffi call and callback (not measured by a command in the repository) |
 | `loader.ffi_prep` | `(iiiii)->i` | libffi's `ffi_prep_closure_loc`: put a function of the closure's signature into the closure's table slot; when called it runs `fun(cif, ret, args, user_data)` | creating a function of a signature known at run time is `Func(store, FuncType, callback)` (JavaScript's `convertJsFunctionToWasm`) | no as a host function; in wasm it would need a generated thunk module per signature through `instantiate`: possible, cost unknown. The signature decoding (`_cif.closure_signature`, `closure_frame`, `closure_result`) is pure logic, **movable** |
 | `loader.ffi_slot` | `()->i` | `getEmptyTableSlot()`: a freed slot, else the table grown by one | `table.grow` of the main module's table | **movable**: the free list is Python, the grow is `aux.table_grow`, which the dynamic adapter already calls; weak justification (not tried) |
 | `loader.ffi_free` | `(i)->` | free a closure's slot: null it, return its `Func` to the pool | releases an engine `Func` held by the host | partly: the slot's `table.set(null)` and the free list are wasm; the pooled `Func` is the host's |
@@ -202,18 +202,18 @@ functions above and how many the adapter answers on its own.
 
 Sizes, on 2026-11-15: the host's Python was 3,802 lines (`src/pyodide_nojs/*.py`, 170 KB) against the adapter's
 4,183 lines of C (181 KB), the guest-side Python 443 lines; about 2,300 lines of the host are engine/OS primitives and about
-850 are pure logic that could live in the adapter. `wc -l` of 2026-11-16 gives more (the code has grown since): 4,321 lines
-for `src/pyodide_nojs/*.py`, 4,301 for `wasm/adapter.c` and `wasm/adapter/*.h`, 660 for `guest/*`. The line
-counts per file below are `wc -l` of 2026-11-16 (`_host.py` 1470 lines includes the engine glue).
+850 are pure logic that could live in the adapter. `wc -l` of 2026-11-16 gives more (the code has grown since): about 4,460 lines
+for `src/pyodide_nojs/*.py`, about 4,300 for `wasm/adapter.c` and `wasm/adapter/*.h`, about 620 for `guest/*`. The line
+counts per file below are `wc -l` of 2026-11-16 (`_host.py`, about 1,490 lines, includes the engine glue).
 
 | piece | lines | what it is | state |
 |---|---|---|---|
-| `_cif.py` | 264 | libffi's `ffi_cif`/`ffi_type` records read from the guest's memory: a call's arguments, a closure's signature and frame, results | pure logic; the calls themselves (`ffi_call`, `ffi_prep`) stay host operations. Measure the 59 us call / 168 us callback before and after |
+| `_cif.py` | 264 | libffi's `ffi_cif`/`ffi_type` records read from the guest's memory: a call's arguments, a closure's signature and frame, results | pure logic; the calls themselves (`ffi_call`, `ffi_prep`) stay host operations. Measure the ffi call and callback before and after |
 | `_sockaddr.py` | 326 | option/flag/error tables, sockaddr/msghdr/send/recv helpers, `getaddrinfo`/`getnameinfo` result building, `ca_bundle` | tables and layouts: logic; the OS calls stay |
 | `_timecalc.py` | 171 | the calendar and JS date helpers, `t_localtime`/`t_mktime`/`t_tzset` shapes, the CPU clocks | the calendar is logic; the offset of a zone and the CPU time are the OS's |
 | `_tty.py` | 257 | termios and window size translated between the host's numbers and Linux's | tables are logic; the termios calls are the OS's |
-| the loader's error texts (`_host.py`: `_DL_WHY`, `_dl_error`) | part of 1470 | V8's `LinkError`/`CompileError` wording and `__dl_seterr` | movable, see `loader.error` |
-| `_dl_sym`, `_dl_call`, `_dl_scope` bookkeeping (`_host.py`) | part of 1470 | the host's per-instance exports and scopes | movable only together, see `loader.sym` |
+| the loader's error texts (`_host.py`: `_DL_WHY`, `_dl_error`) | part of about 1,490 | V8's wording for the `dlerror` text of a failed link (compile errors and traps carry wasmtime's text) and `__dl_seterr` | movable, see `loader.error` |
+| `_dl_sym`, `_dl_call`, `_dl_scope` bookkeeping (`_host.py`) | part of about 1,490 | the host's per-instance exports and scopes | movable only together, see `loader.sym` |
 | `_net.fetch` (HTTP by `urllib`) | part of 542 (`_net.py`) | the host's HTTP(S) for `--pyfetch`: the host's proxies, DNS and trusted roots (the guest has its own `_ssl`) | stays as the opt-in route; an OS fact, not movable |
 
 What stays in the host is what needs the engine or the OS: instantiate, globals, tags, exports, creating a function
@@ -233,6 +233,6 @@ time zone, the CPU clocks, `statvfs`, the terminal (`fs.*`), `proc_exit`, and WA
 
 * No run of the official suite, CI or the `network` tests; only the offline checks named above (the import list of the built wasm, the two counted programs of section 4, `tests/test_host_contract.py`), on Linux.
 * What wasmtime answers for CPU-time clock ids (2 and 3) and for `fd_read` on a terminal stdin was taken from the code's comments, not tested here.
-* "Movable" statements are readings of the code, not prototypes; none was built or measured. Moving anything needs its own brief and a measurement of the ffi call (59 us) and callback (168 us).
+* "Movable" statements are readings of the code, not prototypes; none was built or measured. Moving anything needs its own brief and a measurement of the ffi call and callback.
 * The numbers of the real Pyodide under Node are those of 2026-11-15 and were not re-run.
 * Windows and macOS: `fs.ioctl` (no termios on Windows), `fs.statvfs` (`shutil.disk_usage`) and the zone calls differ there; CI is the only check.

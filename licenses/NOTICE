@@ -4,7 +4,8 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
   MPL-2.0 (Pyodide-LICENSE-MPL-2.0.txt). Pyodide's CPython is under the PSF license (CPython-LICENSE-PSF.txt); the
   Emscripten runtime (6.0.5; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
   (MIT: musl-COPYRIGHT-MIT.txt) compiled into pyodide.asm.wasm. The files are
-  Pyodide's own, with only the legacy wasm exceptions converted to exnref (Binaryen 132); fused is also merged with adapter.wasm.
+  Pyodide's own, with the legacy wasm exceptions converted to exnref (Binaryen 132), and pyodide.asm.wasm also has one patch: libc's
+  `setsockopt` stub is turned into an import (tools/patch_main.mjs); fused is also merged with adapter.wasm.
   Source: https://github.com/pyodide/pyodide (tag 315.0.0a2), https://www.npmjs.com/package/pyodide/v/315.0.0-alpha.2
   CPython's own bundled third-party libraries are compiled into pyodide.asm.wasm too (symbols of expat, zlib, bzip2, liblzma,
   SQLite, Zstandard and libffi are in the binary): their license texts are in CPython-incorporated-software-LICENSES.txt

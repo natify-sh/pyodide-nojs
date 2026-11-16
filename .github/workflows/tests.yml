@@ -1,6 +1,6 @@
 name: Tests
 
-# build.yml builds the wasm once (wasi-sdk 34's clang for everything; Node only as a build tool), then:
+# build.yml builds the wasm once (wasi-sdk 34's clang for everything except the guest's `_ssl`; Node only as a build tool), then:
 #   test     the offline tests on every OS and CPython oldest/newest, both builds (fused and dynamic) in each test
 #   network  the checks that go to PyPI and jsDelivr (the host's fetch, the guest's own TLS, micropip, numpy's wheel)
 #   suite    Pyodide's official CPython test suite (python_tests.yaml, libregrtest) on BOTH builds, one job per build, spread over the cores by xdist

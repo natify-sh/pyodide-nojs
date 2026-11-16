@@ -6,7 +6,8 @@
 #   pyodide-lock.json     the release's package lock (numpy etc.), read by micropip in the guest (guest/pyodide_lock.py)
 #   py/                   micropip and packaging, unpacked from the release's wheels (sha256 of the lock checked: tools/bundle_py.py)
 #   adapter.wasm          wasm/adapter.c, built with wasi-sdk 34's clang (the one toolchain)
-#   pyodide_fused.wasm    the three above merged into one core module (tools/fuse.py, wasm-merge)
+#   pyodide_fused.wasm    the main module and the adapter merged into one core module (tools/fuse.py, wasm-merge; it adds the
+#                         trampoline with table_grow, zero/null stubs for the other `env` imports, the GOT.func globals and the bases)
 #   wasm-opt.wasm         Binaryen 132 as wasm32-wasip1 (tools/build_binaryen.sh, ~12 min); $WASM_OPT_WASM names a
 #                         ready one (CI passes the cached artifact), else an existing one in DATA is kept
 # Needs: node + npm (Binaryen's wasm-opt and wasm-merge), curl, git, cmake and ninja (only for wasm-opt.wasm), python3

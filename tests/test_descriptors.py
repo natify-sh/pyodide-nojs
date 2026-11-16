@@ -545,8 +545,8 @@ print(os.get_blocking(x), before == [fcntl.fcntl(n, fcntl.F_GETFD) for n in (0, 
     assert out == ["True", "False True True", "True True"]
 
 
-# ---- the numbers: a kernel's (BACKLOG B5), whatever WASI's allocator hands out. The expected values are the real
-# Pyodide 315.0.0-alpha.2 on Node's, except where a test says it differs.
+# ---- descriptor numbers are a kernel's (the lowest free one), whatever WASI's allocator hands out. The expected values
+# are the real Pyodide 315.0.0-alpha.2 on Node's, except where a test says it differs.
 
 
 def test_numbers_start_at_3_and_every_new_one_is_the_lowest_free(guest: Guest) -> None:

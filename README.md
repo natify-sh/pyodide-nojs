@@ -1,12 +1,13 @@
 # pyodide-nojs
 
-**Pyodide's own `pyodide.asm.wasm` and its binary wheels, run by Python on [Wasmtime](https://github.com/bytecodealliance/wasmtime-py) with no JavaScript: no browser, no Node, none of Emscripten's glue.** The glue is replaced by a small wasm module (the adapter, C, built with wasi-sdk) and a thin Python host. It shows that Pyodide's artifacts need a JavaScript runtime for the glue and not for what they do, and it runs more than a demo: CPython 3.15, numpy and scipy from Pyodide's lock, sockets, a real `ssl` with OpenSSL 3.5.9, `ctypes`, `micropip`. Alpha: the API and the wasm in the package change without notice; one Pyodide release is supported.
+**Pyodide's own `pyodide.asm.wasm` and its binary wheels, run by Python on [Wasmtime](https://github.com/bytecodealliance/wasmtime-py) with no JavaScript: no browser, no Node, none of Emscripten's glue.** The glue is replaced by a small wasm module (the adapter, C, built with wasi-sdk) and a thin Python host. It shows that Pyodide's artifacts need a JavaScript runtime for the glue and not for what they do. It runs CPython 3.15, numpy and scipy from Pyodide's lock, sockets, a real `ssl` with OpenSSL 3.5.9, `ctypes`, `micropip`. Alpha: the API and the wasm in the package change without notice; one Pyodide release is supported.
+
+Repository: https://github.com/natify-sh/pyodide-nojs; the suite and the tests run in its `Tests` workflow: https://github.com/natify-sh/pyodide-nojs/actions/workflows/tests.yml
 
 **Contents**
 
 - [What it is and why](#what-it-is-and-why)
 - [Quick start](#quick-start)
-- [Using packages](#using-packages)
 - [Architecture](#architecture)
   - [The layers](#the-layers)
   - [The two packagings, CLI and API](#the-two-packagings-cli-and-api)
@@ -14,9 +15,10 @@
   - [What a non-JS host must provide](#what-a-non-js-host-must-provide)
 - [Dynamic loading without JS](#dynamic-loading-without-js)
 - [TLS](#tls)
-- [Network and fetch](#network-and-fetch)
 - [What is tested](#what-is-tested)
 - [Differences from Pyodide and known gaps](#differences-from-pyodide-and-known-gaps)
+- [Network and fetch](#network-and-fetch)
+- [Using packages](#using-packages)
 - [Build, run and test it yourself](#build-run-and-test-it-yourself)
 - [Bumping to another Pyodide release](#bumping-to-another-pyodide-release)
 - [Licenses and layout](#licenses-and-layout)
@@ -24,7 +26,7 @@
 If you have ten minutes: [How the Emscripten glue is replaced](#how-the-emscripten-glue-is-replaced), [What a non-JS host must provide](#what-a-non-js-host-must-provide), [Dynamic loading without JS](#dynamic-loading-without-js), [TLS](#tls) and [What is tested](#what-is-tested).
 
 ## What it is and why
-It is written first of all for the Pyodide maintainers, as the working answer to a question, and then for anyone who wants Pyodide's wheels in a server-side or embedded Python without a browser or Node. It exists to show that Pyodide's CPython and its wheels run without JavaScript: in [pyodide/pyodide#5145](https://github.com/pyodide/pyodide/discussions/5145) the answer was that Pyodide "can only run in a JavaScript runtime" and that one would "have to rewrite the entire dynamic loader". Here the dynamic loader is rewritten: its logic is wasm, in the adapter, and the host only supplies 7 engine primitives ([Dynamic loading without JS](#dynamic-loading-without-js)); Pyodide's own CPython test list runs on it. It is meant to run anything Pyodide runs without the browser's JavaScript: the standard library, Emscripten wheels (numpy and the rest of Pyodide's lock), files, sockets, TLS, `ctypes`/`cffi`.
+It is written first of all for the Pyodide maintainers, as the working answer to a question, and then for anyone who wants Pyodide's wheels in a server-side or embedded Python without a browser or Node. It exists to show that Pyodide's CPython and its wheels run without JavaScript: in [pyodide/pyodide#5145](https://github.com/pyodide/pyodide/discussions/5145) the answer was that Pyodide "can only run in a JavaScript runtime" and that one would "have to rewrite the entire dynamic loader". Here the dynamic loader is rewritten: its logic is wasm, in the adapter, and the host supplies the engine's primitives: 38 operations, 7 of them the loader's ([Dynamic loading without JS](#dynamic-loading-without-js)); Pyodide's own CPython test list runs on it. It is meant to run anything Pyodide runs without the browser's JavaScript: the standard library, Emscripten wheels (numpy and the rest of Pyodide's lock), files, sockets, TLS, `ctypes`/`cffi`.
 
 It is **not a fork of Pyodide**: Pyodide is not rebuilt, its artifacts are used unrebuilt, with two named binary changes: `tools/patch_main.mjs` turns libc's `setsockopt` (which Emscripten compiles to `return 0`) into a call of an import the adapter answers, and Binaryen converts the legacy wasm exceptions to `exnref` (Wasmtime does not run the legacy ones). It is **not Pyodide's JavaScript API**: `js`, `pyodide.ffi`, `JsProxy`/`PyProxy` need the bridge, which does not exist here ([how the glue is replaced](#how-the-emscripten-glue-is-replaced)). It is **not a sandbox against the host's kernel** (the network is off by default; `--inherit-network` and mounts hand the host's resources over) and **not a WebAssembly Component**: Emscripten's ABI (a wheel imports the main module's memory, table, stack pointer and `GOT.*` globals) does not fit the Component Model, and `dlopen` needs a new core module at run time.
 
@@ -50,7 +52,7 @@ $ pyodide-nojs --inherit-network --allow-top-level-await
 'OpenSSL 3.5.9 29 Sep 2026'
 >>> import micropip; await micropip.install("numpy")
 ```
-Command line (`pyodide-nojs -h` has the text): `pyodide-nojs [OPTIONS] [--] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]`; after a `--` everything is Python's own command line, as in `pyodide-nojs --venv .venv-pyodide -- -m mypkg --flag` (the options of `pyodide-nojs` before it, `-c`, a file or `-m` after it); without `--` the first `-c`, file or `-m` starts the program; `-m MODULE` runs a module as `__main__`, as `python -m` does (`sys.argv[0]` is the module's file, everything after MODULE is the module's, so the options of `pyodide-nojs` go before `-m`; after a script or `-c`, `-m` is an argument of that program). Options: `-c CODE`, `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--venv DIR` (a virtual environment made by `pyodide venv`, checked for Python and ABI), `--mount GUEST=HOST`, `--mount-cwd` (the host's current folder at `/host`), `--env K=V`, `--inherit-env` (ALL the host's variables, secrets included), the network flags `--inherit-network --tcp --udp --dns --http --pyfetch` (default off), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL), `--asm-wasm FILE`, `--stdlib FILE`, `--data DIR` (other wasm files than the package's), `-v`/`--verbose` (log the loader and the network), `--version`.
+Command line (`pyodide-nojs -h` has the text): `pyodide-nojs [OPTIONS] [--] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]`; after a `--` everything is Python's own command line, as in `pyodide-nojs --venv .venv-pyodide -- -m mypkg --flag` (the options of `pyodide-nojs` before it, `-c`, a file or `-m` after it); without `--` the first `-c`, file or `-m` starts the program; `-m MODULE` runs a module as `__main__`, as `python -m` does (`sys.argv[0]` is the module's file, everything after MODULE is the module's, so the options of `pyodide-nojs` go before `-m`; after a script or `-c`, `-m` is an argument of that program). Options: `-c CODE`, `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--venv DIR` (a virtual environment made by `pyodide venv`, checked for Python and ABI), `--mount GUEST=HOST`, `--mount-cwd` (the host's current folder at `/host`), `--env K=V`, `--inherit-env` (ALL the host's variables, secrets included), the network flags `--inherit-network --tcp --udp --dns --http --pyfetch` (default off), `--allow-top-level-await` (`await` at the top level of a program: `-c`, a file, stdin, the REPL; not with `-m`: the command line refuses the combination), `--asm-wasm FILE`, `--stdlib FILE`, `--data DIR` (other wasm files than the package's), `-v`/`--verbose` (log the loader and the network), `--version`.
 
 ```python
 from pyodide_nojs import Pyodide
@@ -59,79 +61,18 @@ with Pyodide() as py:  # "dynamic" by default; Pyodide("fused") or $PYODIDE_NOJS
     py.run("import json; print(json.dumps({'a': 1}))")  # 0 if it ran, 1 if it raised, N for sys.exit(N)
     py.run("import sys; sys.exit(3)")  # -> 3, the interpreter stays usable
 ```
-`Pyodide(preload=CODE)` runs CODE once and keeps the guest's memory as a snapshot in the cache folder (one file of about 30 MB per packaging, mode 0600 in a 0700 folder, keyed by the preload, the wasm files, the environment and whether stdin/stdout/stderr are terminals); the next start restores it instead of booting Python. The preload must only import and compute (it prints at snapshot time only); opening files or sockets, `chdir`, writing files, `dlopen` and `ctypes` lookups make the snapshot be skipped (a normal start). With `site=`, `mounts=` or `inherit_env=True` there is none, so that the host's variables do not get into the file; variables given with `env=` DO go into a snapshot. The snapshot keeps its hash seed (`random` is re-seeded). `PYODIDE_NOJS_SNAPSHOT=0` turns it off; the REPL uses it.
+`Pyodide(preload=CODE)` runs CODE once and keeps the guest's memory as a snapshot in the cache folder (one file of about 30 MB per packaging, mode 0600 in a 0700 folder, keyed by the preload, the wasm files, the environment and whether stdin/stdout/stderr are terminals); the next start restores it instead of booting Python. The preload must only import and compute (it prints at snapshot time only); opening files or sockets, `chdir`, writing files, `dlopen` and `ctypes` lookups make the snapshot be skipped (a normal start). With `site=`, `venv=` / `--venv` (a venv is one more site folder), `mounts=` (also `--mount` and `--mount-cwd`) or `inherit_env=True` there is none (the snapshot is made without them, and the host's variables must not get into the file); variables given with `env=` DO go into a snapshot. The snapshot keeps its hash seed (`random` is re-seeded). `PYODIDE_NOJS_SNAPSHOT=0` turns it off; the REPL uses it.
 
 Other Pyodide files can be tried on the dynamic build: `Pyodide("dynamic", asm_wasm="pyodide.asm.wasm", stdlib="python_stdlib.zip")` (either one; the adapter and `wasm-opt.wasm` stay the package's), `--asm-wasm`/`--stdlib`, or `$PYODIDE_NOJS_ASM_WASM`/`$PYODIDE_NOJS_STDLIB`. They imply `dynamic` (`fused` with them is an error: the fused module is built for one Pyodide). A raw `pyodide.asm.wasm` from the npm package (legacy exceptions) is converted once by `wasm-opt.wasm` and cached. At start a warning on stderr says what is not the pinned build's (CPython's version string, an `env` import the adapter does not know (`-v` lists them), a missing `setsockopt` patch, a stdlib zip of another Python). Only the pinned build is tested.
-
-## Using packages
-Pick by what you want:
-
-| you want | do |
-|---|---|
-| to try a package once | `await micropip.install("numpy")` in the REPL ([below](#try-a-package-in-the-repl-nothing-is-kept)) |
-| Pyodide's own packages (`numpy`, `scipy`, `cffi`...) kept between runs | a venv made by `pyodide venv`, then `--venv` ([below](#keep-packages-between-runs-a-pyodide-venv)) |
-| PyPI wheels built for Pyodide, kept, with no Node | plain `pip install --target`, then `--site` ([below](#without-pyodide-build-plain-pip)) |
-| your own files or folders | `--site DIR` (copied into the guest's site-packages) or `--mount GUEST=HOST` |
-
-### Try a package in the REPL (nothing is kept)
-```text
-$ pyodide-nojs --inherit-network --allow-top-level-await
->>> import micropip
->>> await micropip.install("numpy")        # Pyodide's own build, from its lock: about 10.7 MB from jsDelivr
->>> import numpy; numpy.arange(5).sum()
-np.int32(10)
-```
-`--inherit-network` lets the guest open sockets and resolve names (see [Network and fetch](#network-and-fetch)); `--allow-top-level-await` allows `await` at the prompt. What `micropip` installs lives in the guest's temporary root and is gone when the run ends, so the next run downloads it again.
-
-### Keep packages between runs: a `pyodide venv`
-`pyodide venv` (from `pyodide-build`) makes a virtual environment for exactly this Pyodide and a `pip` that installs wheels for it, including Pyodide's own `numpy`. It needs Node.js and a host Python 3.15, only for making the venv and installing; running the packages needs neither.
-```sh
-pip install pyodide-build==0.39.3        # this version pairs with the pinned Pyodide; do not use another
-                                         # (or: pip install 'pyodide-nojs[venv]', which asks for exactly that version)
-pyodide venv .venv-pyodide               # fetches the matching cross-build environment itself: a venv for Python 3.15
-.venv-pyodide/bin/pip install numpy requests          # the venv's own pip (Windows: .venv-pyodide\Scripts\pip)
-pyodide-nojs --venv .venv-pyodide --inherit-network --allow-top-level-await
-```
-```text
->>> import numpy, requests
->>> numpy.arange(5).sum()
-np.int32(10)
-```
-`--venv DIR` (API: `Pyodide(venv=DIR)`) is the venv's **root**; it finds the site-packages itself and copies it into the guest at every start (a big venv slows the start: keep only what you need). It checks the venv: a venv of another Python is an error, a package built for another Python or Pyodide is a warning that names it (pure-Python packages work anywhere). Packages with C code (`numpy`) load through the same `dlopen` as in Pyodide.
-
-Instead of the venv's `pip`, `uv` installs into the venv: `uv pip install --python .venv-pyodide/bin/python --no-build --extra-index-url file://<xbuildenv>/pyodide-root/package_index --index-strategy unsafe-best-match numpy` (checked: numpy 2.4.3 installed), where `<xbuildenv>` is `~/.cache/pyodide-build/.pyodide-xbuildenv-<hash>/315.0.0a2/xbuildenv`; the hash is in that folder's name, and a shell glob does not work inside a `file://` URL, so look at `ls ~/.cache/pyodide-build/`. `uv` cannot make the venv itself: its Pyodide interpreters stop at Python 3.14.2 (`uv python list --all-versions --all-platforms | grep -i emscripten`).
-
-### Without pyodide-build: plain pip
-Wheels for Pyodide's platform that PyPI hosts (PEP 783, tag `pyemscripten_2026_5_wasm32`) install into a folder with pip 26 or newer, on any host Python and with no Node; `--site` then copies the folder into the guest:
-```sh
-pip install --target pkgs --platform pyemscripten_2026_5_wasm32 --python-version 3.15 --implementation cp --abi cp315 \
-    --only-binary=:all: py_ballisticcalc.exts py_ballisticcalc
-pyodide-nojs --site pkgs -c "import py_ballisticcalc_exts, py_ballisticcalc; print(py_ballisticcalc.__version__)"
-```
-Pyodide's own packages (`numpy`...) are not on PyPI, so this way cannot install them: use `micropip` or a `pyodide venv`.
-
-### When it does not work
-| what you see | why | what to do |
-|---|---|---|
-| `ModuleNotFoundError` after `--site DIR` | DIR is the venv's root, or an empty folder: `--site` copies a folder as it is | `--venv .venv-pyodide`, or `--site .venv-pyodide/lib/python3.15/site-packages` |
-| `--venv: the virtual environment is for Python 3.14` | the venv was made for another Pyodide (for example with `uv`: it knows only the Pyodide of Python 3.14) | make it with `pyodide venv` of `pyodide-build==0.39.3` |
-| `emscripten does not support processes` while installing `numpy` with `uv pip install --python .venv-pyodide/bin/python` | `uv` does not read the venv's `pip.conf` (only-binary and the index of Pyodide's own packages), so it builds `numpy` from source | use `.venv-pyodide/bin/pip install numpy` |
-| `unrecognized arguments: --venv` | an older checkout | update the repository or the wheel |
-| a warning "holds packages built for another Python or Pyodide" | wheels of another ABI (for instance `numpy` of Pyodide 314) | install them again with the venv's own `pip` |
-| `PermissionError` or `gaierror -4` while `micropip` installs | the network is off by default | add `--inherit-network` |
-
-Checked on both packagings: `six`, `numpy` 2.4.3 (Pyodide's own build, from the xbuildenv's package index: it is not on PyPI) and `py_ballisticcalc_exts` 3.1.1 (a native PyPI wheel) in a `pyodide venv`; `py_ballisticcalc_exts` through plain pip. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a venv that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS.
-
-Pyodide's own `python` command (a drop-in for the native one: `-c`, a file, `-m`; Node.js 20+, not sandboxed, from the `pyodide-core` release archive, `pyodide venv`, or `uv python install` of Pyodide's CPython with its package index) is the reference for what a command line should do. `pyodide-nojs` takes the same three (`-c`, a file, `-m`); it needs no Node, and the network and the host's files are closed unless granted.
 
 ## Architecture
 ### The layers
 ```
- Python host  src/pyodide_nojs/_host.py (class Pyodide) + _guest, _net, _engine, _wasm, _tty, _timecalc, _sockaddr, _cif, _consts
+ Python host  src/pyodide_nojs/_host.py (class Pyodide) + _guest, _net, _engine, _wasm, _tty, _timecalc, _sockaddr, _cif, _venv, _cli, _consts
       |  38 host operations (loader 16, net 19, fs 3) + wasmtime's own WASI preview1        docs/HOST_CONTRACT.md
  ---------------------------------------------------------------------------------------------------------------
  adapter      wasm/adapter.c + wasm/adapter/*.h -> adapter.wasm       the glue as wasm: syscalls, loader, ffi, sockets, time
-      |  answers 95 of the 264 `env` imports of the main module (the rest: JS bridge, zero/null stubs)
+      |  answers 95 of the 264 `env` imports of the main module (the rest: JS bridge, zero/null stubs; the 95: see below)
  pyodide.asm.wasm (Pyodide 315.0.0-alpha.2, CPython 3.15 + libs) -- two build steps only: setsockopt patch, exnref
       |  dlopen at run time of: side modules (.so of wheels, data/tls/_ssl...so), converted by wasm-opt.wasm if they use legacy exceptions
  Python code of the guest: stdlib zip, site-packages (micropip, packaging, tls/, guest/*.py), the user's program
@@ -149,6 +90,7 @@ The host's modules, each with one owner of its state (checked by `tests/test_sta
 | module | what it owns |
 |---|---|
 | `_host.py` | `Pyodide`: start, `run()`, `interrupt()`, the loader's instances and scopes, `proc_exit`, snapshot |
+| `_cli.py` | the command line (`python -m pyodide_nojs`, `pyodide-nojs`): options, the REPL, the worker thread and Ctrl-C |
 | `_guest.py` | `Guest`: the one read-only handle to the store, exports, memory, table, the memory accessors and the call contexts |
 | `_net.py` | `Net`: the host's sockets, DNS, the network policy and the host's fetch, with their state |
 | `_engine.py` | the Wasmtime engine (exceptions, function references, GC), the machine-code cache, `wasm-opt.wasm` run in-process |
@@ -157,6 +99,7 @@ The host's modules, each with one owner of its state (checked by `tests/test_sta
 | `_timecalc.py` | the calendar and JS date helpers, local time operations, CPU clocks |
 | `_sockaddr.py` | socket option/flag/error tables, sockaddr/msghdr helpers, the resolver half of `getaddrinfo`, `ca_bundle` |
 | `_cif.py` | libffi's `ffi_cif`/`ffi_type` records read from the guest's memory |
+| `_venv.py` | plain functions: a `pyodide venv`'s site-packages, and the check of its Python and ABI |
 | `_consts.py` | constants, `GuestFault`/`GuestExit`, number helpers, `data_dir`, `code_hash` (the host's part of the snapshot key) |
 
 The guest-side Python (`src/pyodide_nojs/guest/`, run inside the guest; copied into its site-packages before the `site=` folders, so a `site=` file of the same name wins, except `pyodide_nojs_run.py`, which is written last):
@@ -192,11 +135,11 @@ Wheels with legacy exceptions are converted at `dlopen` by `wasm-opt.wasm` (`Pyo
 | enosys | 4 | `-ENOSYS`: `epoll_create1`, `epoll_ctl`, `epoll_pwait` (Pyodide's JavaScript does the same) and `system` (no shell of the host) |
 | n/a | 169 | no meaning without JavaScript: 158 are the JS bridge (`js-value` 149, `js-bridge` 9), 11 are hooks of Pyodide's JS harness; zero/null stubs, hidden from `dlsym` and from the GOT, so a side module that needs one by symbol fails to load instead of getting a zero |
 
-So 95 imports are answered (66 + 25 + 4): 91 of them are exports of `adapter.wasm` by name (counted below), 3 epoll calls are `-ENOSYS` stubs of the dynamic shim, and `_PyEM_TrampolineCall_JS` is the WAT trampoline (`ref.test` on the table entry's type, then `call_ref`; needs wasm GC).
+So 95 `env` imports are answered (66 + 25 + 4): 91 are exports of `adapter.wasm`, 3 `epoll` calls are `-ENOSYS` stubs of the dynamic build's shim, 1 is the trampoline written in WAT (`_PyEM_TrampolineCall_JS`: `ref.test` on the table entry's type, then `call_ref`; needs wasm GC).
 Measured with: wasmtime-py `Module(...).imports` of `src/pyodide_nojs/data/*.wasm`, counted by module and compared with the adapter's `exports` (script run in the step that wrote this README; `tests/test_import_audit.py` holds the audit to the built adapter).
 
 ### What a non-JS host must provide
-This is the answer to "which imports must a non-JS host provide" for the pinned Pyodide. With the adapter, a host provides **WASI preview1 and the 38 operations** below (the dynamic build adds one wasm function, `aux.table_grow`, which the host builds) and nothing else; the stable subset is what the adapter answers, grouped by kind (counts of the 95 answered `env` imports, from `docs/import_audit.json`):
+This is the answer to "which imports must a non-JS host provide" for the pinned Pyodide. With the adapter, a host provides **WASI preview1 and the 38 operations** below (the dynamic build adds one wasm function, `aux.table_grow`, which the host builds) and nothing else; the stable subset is what the adapter answers, grouped by kind (counts of the 95 answered `env` imports, from `docs/import_audit.json`: 91 are exports of `adapter.wasm`, 3 `epoll` calls are `-ENOSYS` stubs of the dynamic build's shim, 1 is the WAT trampoline):
 
 | kind | imports | notes |
 |---|---|---|
@@ -219,7 +162,7 @@ This is the answer to "which imports must a non-JS host provide" for the pinned 
 | 169 `env` imports of the JS bridge and hooks, and the 280 `GOT.func` globals | zero/null stubs and globals in the dynamic shim; nothing in the fused module |
 
 
-<details><summary>The 95 <code>env</code> imports the adapter answers (full, partial or ENOSYS), by class</summary>
+<details><summary>The 95 <code>env</code> imports that are answered (91 exports of <code>adapter.wasm</code>, 3 <code>epoll</code> <code>-ENOSYS</code> stubs of the dynamic shim, 1 WAT trampoline), by class</summary>
 
 **os** (60): `__syscall_accept4`, `__syscall_bind`, `__syscall_chdir`, `__syscall_chmod`, `__syscall_connect`, `__syscall_dup`, `__syscall_dup3`, `__syscall_epoll_create1`, `__syscall_epoll_ctl`, `__syscall_epoll_pwait`, `__syscall_faccessat`, `__syscall_fadvise64`, `__syscall_fallocate`, `__syscall_fchdir`, `__syscall_fchmod`, `__syscall_fchmodat2`, `__syscall_fchown32`, `__syscall_fchownat`, `__syscall_fcntl64`, `__syscall_fdatasync`, `__syscall_fstat64`, `__syscall_fstatfs64`, `__syscall_ftruncate64`, `__syscall_getcwd`, `__syscall_getdents64`, `__syscall_getegid32`, `__syscall_geteuid32`, `__syscall_getgid32`, `__syscall_getpeername`, `__syscall_getsockname`, `__syscall_getsockopt`, `__syscall_getuid32_js`, `__syscall_ioctl`, `__syscall_linkat`, `__syscall_listen`, `__syscall_lstat64`, `__syscall_mkdirat`, `__syscall_mknodat`, `__syscall_newfstatat`, `__syscall_openat`, `__syscall_pipe2`, `__syscall_poll`, `__syscall_poll_nonblocking`, `__syscall_readlinkat`, `__syscall_recvfrom`, `__syscall_recvmsg`, `__syscall_renameat`, `__syscall_rmdir`, `__syscall_sendmsg`, `__syscall_sendto`, `__syscall_setsockopt_host`, `__syscall_shutdown`, `__syscall_socket`, `__syscall_stat64`, `__syscall_statfs64`, `__syscall_symlinkat`, `__syscall_truncate64`, `__syscall_umask_js`, `__syscall_unlinkat`, `__syscall_utimensat`
 
@@ -230,7 +173,7 @@ This is the answer to "which imports must a non-JS host provide" for the pinned 
 (From `docs/import_audit.json`; the other 169 are the JS bridge and hooks that mean nothing without JS.)
 </details>
 
-Only a Python host (`wasmtime-py`, this repository's `_host.py`) exists: the contract is not Python-specific (it is the list of wasm imports and what each does), but no host in another language has been written, so that part is not proven.
+**A host in another language.** Start from `data/pyodide_fused.wasm`: it imports only WASI preview1 (33 imports, 32 distinct functions) and the 16 `loader`, 19 `net` and 3 `fs` operations (71 imports in all, no `aux`; counted with wasmtime-py's `Module(...).imports`). The adapter, the loader's wasm part and the stubs are already inside it, so such a host needs WASI plus the 38 operations of [docs/HOST_CONTRACT.md](docs/HOST_CONTRACT.md) and nothing else. For the dynamic build it must in addition build what `src/pyodide_nojs/_wasm.py` builds: the shim that exports the 91 adapter answers through the table, the 169 stubs and the 280 `GOT.func` globals, and the trampoline module with `aux.table_grow`. The engine must support exceptions (`exnref`), function references and GC, and must let the host create a `Global`, `Tag` and `Func` and link a module at run time. No such host exists yet: only a Python one (`wasmtime-py`, this repository's `_host.py`) has been written, so the contract is not proven outside Python.
 
 A program that only boots calls two of the 38 (`loader.localtime`, `loader.tzset`): measured by a throw-away counter around `Pyodide._ops()` (docs/HOST_CONTRACT.md, section 4). The whole contract, with why each operation cannot be wasm and which could move, is [docs/HOST_CONTRACT.md](docs/HOST_CONTRACT.md); `tests/test_host_contract.py` fails when an import of the adapter has no row there.
 For comparison, the same document records for real Pyodide under Node that booting calls 49 distinct imports (not re-measured here).
@@ -239,43 +182,23 @@ For comparison, the same document records for real Pyodide under Node that booti
 Emscripten's `loadDynamicLibrary`/`loadWebAssemblyModule` is JavaScript, and a wasm module cannot execute bytes as code or create a `Global`, `Tag`, `Func` or `Instance`. The split used here (`wasm/adapter/loader.h`):
 
 * **the adapter, in wasm** (`_dlopen_js`, `_emscripten_dlopen_js`, `_dlsym_js`): reads the file through WASI; reads `dylink.0` (memory and table sizes and alignments, and **NEEDED**); loads the NEEDED libraries first, found as the glue finds them (runtime paths, `LD_LIBRARY_PATH`, else the name as written); takes memory for the module from the main module's `calloc` and slots from the table (growing it); builds the GOT (`GOT.mem`/`GOT.func`) by name, where the first definition wins: the main module, then the libraries in load order, then the module's own exports, and a name found nowhere is an error unless the import is weak; and calls `__wasm_apply_data_relocs` and `__wasm_call_ctors` (and the init functions). `dlclose` only counts, as the glue's does.
-* **the host, 16 `loader` operations**, of which 7 are the loader's: `instantiate` (compile and instantiate the bytes against the main module's memory, table, stack pointer, exception tag, `__memory_base`/`__table_base`; every `GOT.*` import becomes a new mutable i32 global; a name with no definition is bound lazily, as the glue does), `got_set`, `sym` (an export by name: a global's value or a table slot), `call` (an export with no arguments), `scope`, `error` (the `dlerror` text, in V8's wording) and `depth` (how deep NEEDED may nest on the engine's stack). Only engine primitives; five more are libffi's, four are the time zone and CPU clocks.
+* **the host, 16 `loader` operations**, of which 7 are the loader's: `instantiate` (compile and instantiate the bytes against the main module's memory, table, stack pointer, exception tag, `__memory_base`/`__table_base`; every `GOT.*` import becomes a new mutable i32 global; a name with no definition is bound lazily, as the glue does), `got_set`, `sym` (an export by name: a global's value or a table slot), `call` (an export with no arguments), `scope`, `error` (the `dlerror` text: one that a failed link makes is built in V8's wording, a compile error or a trap carries wasmtime's text) and `depth` (how deep NEEDED may nest on the engine's stack). Only engine primitives; five more are libffi's, four are the time zone and CPU clocks.
 * **wheels with legacy exceptions** (every Emscripten wheel with C++ exceptions, numpy's two modules...) are converted at `dlopen` by **`wasm-opt.wasm`**: Binaryen 132 built as `wasm32-wasip1` and run in the host process by wasmtime-py (`translate_to_exnref`); no Node, no native Binaryen. `$WASM_OPT` can name another converter. The modules the build ships are converted at build time.
 * **`emscripten_dlopen`'s callback** runs as a pending call of the interpreter (`Py_AddPendingCall`): right after the call returns, before the next statement; Pyodide runs it from its JavaScript event loop, after the current synchronous code (a known difference, see [Differences from Pyodide and known gaps](#differences-from-pyodide-and-known-gaps)).
 
 Exercised by `tests/test_loader.py`, `tests/test_ffi.py`, the numpy/scipy/cffi checks and the official suite below.
 
 ## TLS
-The guest has a **real `_ssl` always**: CPython 3.15's `_ssl.c` with **OpenSSL 3.5.9** (the version CPython's own CI builds against), built the official way (`pyodide-build`, Emscripten 6.0.5, the CFLAGS of the pinned Pyodide's xbuildenv: `tools/build_ssl.sh`) as a side module, `_ssl.cpython-315-wasm32-emscripten.so`, **4,057,787 bytes**, which `pyodide.asm.wasm` loads unmodified through `dlopen`. **The main module does not grow**: it is 9,995,716 bytes with or without TLS (`ls -l src/pyodide_nojs/data/pyodide.asm.wasm src/pyodide_nojs/data/tls/`). For the reader of [pyodide/pyodide#6540](https://github.com/pyodide/pyodide/issues/6540) (OpenSSL "added about 4 MiB to the main module"): the pinned main module has no OpenSSL either way (`strings pyodide.asm.wasm | grep -ci openssl` gives 0, and `hashlib` stays on HACL\*, `_hashlib` is not loaded), so this does not compare two main modules; what it shows is that OpenSSL 3.5.9 costs **4,057,787 bytes as a separate file that only a program that imports `ssl` loads**, and that Pyodide's own `pyodide.asm.wasm` loads it through the ordinary `dlopen` with nothing changed. Whether the same side module would load in Pyodide's browser and Node builds was not tested here. The file is copied into the guest's site-packages together with CPython's `ssl.py` (54,133 bytes), ahead of Pyodide's stub in the stdlib zip, which is how the stub is replaced: `import ssl` in the guest gives `OpenSSL 3.5.9` and `/lib/python3.15/site-packages/ssl.py` (checked with `uv run pyodide-nojs -c "import ssl; print(ssl.OPENSSL_VERSION, ssl.__file__)"`).
+The guest has a **real `_ssl` always**: CPython 3.15's `_ssl.c` with **OpenSSL 3.5.9** (the version CPython's own CI builds against), built the official way (`pyodide-build`, Emscripten 6.0.5, the CFLAGS of the pinned Pyodide's xbuildenv: `tools/build_ssl.sh`) as a side module, `_ssl.cpython-315-wasm32-emscripten.so`, **4,057,787 bytes**, which `pyodide.asm.wasm` loads unmodified through `dlopen`. **The main module does not grow**: it is 9,995,716 bytes with or without TLS (`ls -l src/pyodide_nojs/data/pyodide.asm.wasm src/pyodide_nojs/data/tls/`). For the reader of [pyodide/pyodide#6540](https://github.com/pyodide/pyodide/issues/6540) (OpenSSL "added about 4 MiB to the main module"): the pinned main module has no OpenSSL either way (`strings pyodide.asm.wasm | grep -ci openssl` gives 0, and `hashlib` stays on HACL\*, `_hashlib` is not loaded), so this does not compare two main modules; what it shows is that OpenSSL 3.5.9 costs **4,057,787 bytes as a separate file that only a program that imports `ssl` loads**, and that Pyodide's own `pyodide.asm.wasm` loads it through the ordinary `dlopen` with nothing changed. Whether the same side module would load in Pyodide's browser and Node builds was not tested here. The file is copied into the guest's site-packages together with CPython's `ssl.py` (54,133 bytes), ahead of Pyodide's stub in the stdlib zip, which is how the stub is replaced: the guest's `start()` moves site-packages before the zip on `sys.path`, so CPython's `ssl.py` and the real `_ssl` shadow the stub (the stub lives in the zip). A side effect of that order: a module in site-packages shadows a standard-library module of the same name, so a wheel that ships `ssl.py` or `json.py` would win. `import ssl` in the guest gives `OpenSSL 3.5.9` and `/lib/python3.15/site-packages/ssl.py` (checked with `uv run pyodide-nojs -c "import ssl; print(ssl.OPENSSL_VERSION, ssl.__file__)"`).
 
 Verified (`tests/test_tls.py`, network tests, and the official `test_ssl`): a TLS 1.3 handshake, hostname verification, certificate verification against the host's roots (`SSL_CERT_FILE`, Python's default paths, the system's file, `certifi` if present, and on Windows the system stores `ROOT` and `CA`; the bundle is copied to the guest's `/etc/ssl/cert.pem`), a loopback handshake test, `ssl.get_sigalgs()`. The 15 `test_ssl` tests that start a threaded server are skipped (the guest has no threads, as Pyodide). A file named by `SSL_CERT_FILE` that also holds a private key would put that key into the guest.
 
 Note: `_ssl` is built with a different toolchain than the rest. wasi-sdk 34's clang builds the adapter and `wasm-opt.wasm`; `_ssl` is built as Pyodide builds its packages (Emscripten), in the build and in CI only; the result is a file in `data/tls`, never committed. The `tools/build_ssl.sh` run needs uv, the network and about 4 GB. Pyodide's JavaScript is not involved.
 
-## Network and fetch
-Off by default; the flags are as in Wasmtime's `-S` and only control what the host lets the guest reach (they never choose a Pyodide feature: the real `ssl` is always there). `Pyodide(inherit_network=True, tcp=..., udp=..., dns=..., http=..., pyfetch=...)` are the API names.
-
-| flag | grants | denied looks like |
-|---|---|---|
-| `--tcp` | TCP sockets: create, connect, bind, listen, accept | `PermissionError` (EACCES) |
-| `--udp` | UDP sockets | `PermissionError` |
-| `--dns` | name lookup (a numeric address such as `127.0.0.1` resolves without it) | `socket.gaierror` `EAI_FAIL` |
-| `--http` | the host's fetch (used by `hostnet.install()` and `--pyfetch`) | an `OSError` that names `--http` |
-| `--inherit-network` | all four above | |
-| `--pyfetch` | grants nothing: installs the handler so that `urllib`, `urllib3` (`requests`) and `pyodide.http.pyfetch` send through the host's fetch (the host's proxies, DNS and trusted roots); needs `--http` | the fetch refuses without `--http` |
-
-Two ways to reach the network: **by default the guest's own sockets and TLS** (`micropip`, `urllib`, `requests` need `--tcp --dns`, which `--inherit-network` gives), the same in the REPL as in `-c` and files; or **`--pyfetch`** (with `--http` the guest needs no socket of its own). `import hostnet; hostnet.install()` does the same from a program. A download through the host's fetch is asked for in 1 MiB `Range` pieces (a server without ranges is read whole), so Ctrl-C is seen between pieces; `-v` logs every request with its URL and size.
-
-Details: the guest has no `AF_UNIX`: `socket.socketpair()` is a TCP pair over the host's `127.0.0.1` and needs `--tcp`. asyncio's default loop needs no flag (one thread, no self-pipe; its sockets need `--tcp`); a Ctrl-C in `await asyncio.sleep(30)` is taken within a few ms.
-
-**The guest is isolated.** Its environment is Pyodide's minimal one (`USER`/`LOGNAME=web_user`, `PATH=/`, `PWD=/`, `HOME=/home/pyodide` (the folder exists), `LANG=en_US.UTF-8`, `PYTHONINSPECT=1` as Pyodide's JavaScript sets it, `LD_LIBRARY_PATH`) plus `env=`; nothing of the host's environment or files reaches it unless asked: `inherit_env=True` / `--inherit-env` (all variables, secrets included; `env=` wins; `PYTHONHOME`, `PYTHONPATH`, `LD_LIBRARY_PATH` are not taken), `mounts={"/data": "/host/dir"}` / `--mount`, `--mount-cwd`. The guest's `/` is a temporary folder; it starts in `/home/pyodide`. The time zone is the host's. `sys.executable` is `'/home/pyodide/this.program'` as in the browser (the file does not exist); `sys._emscripten_info.runtime` is `'pyodide-nojs <ver>'` here.
-
-`micropip` works with no JavaScript: the package carries `pyodide-lock.json` (31 packages: 27 of type `package`, 4 shared libraries), and in the guest `micropip` resolves a name in it first, downloads the wheel from `https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/` (sha256 checked) and unpacks it; a package not in the lock comes from PyPI; one already installed is not fetched again. The lock's `libopenssl` entry is Pyodide's own shared library (OpenSSL 1.1.1w, for `ctypes` users) and has nothing to do with the guest's `_ssl`. `micropip` 0.11.1 and `packaging` 26.1 are the release's wheels unpacked into `data/py` (sha256 checked against the lock), so a `site=` copy wins. scipy installs and runs (`scipy.linalg.det`). Installing needs HTTPS: the guest's own TLS or the host's fetch.
-
 ## What is tested
-Pyodide's **official CPython test list** (`python_tests.yaml` of the release: 819 entries, run with libregrtest through `tests/test_pyodide_suite.py`, one guest process per test module as Pyodide's `test_cpython_core` does) on **both packagings**. From the CI run of 2026-11-16 (jobs `Pyodide suite / fused` and `Pyodide suite / dynamic`, Linux): **607 passed, 186 skipped, 30 xfailed, 0 failed of 823 results** (the list's 819 entries plus a few tests of the harness itself), the same on both packagings; the jobs took 43 and 27 minutes (`-n auto`, one job per packaging, `timeout-minutes: 120`). The repository's own offline tests: **810 collected** (`CI=1 uv run pytest --collect-only -q -m "not network and not suite" tests | tail -1`, which counts each test per packaging where it is parametrized); CI (`tests.yml`) runs them on **Linux, Windows and macOS x Python 3.12 and 3.15**, plus the network tests (PyPI and jsDelivr: the host's fetch, the guest's TLS, `micropip`, numpy's wheel) and the suite. Not included: Pyodide's tests of the JavaScript API and `@run_in_pyodide` (they need a browser or Node).
+Pyodide's **official CPython test list** (`python_tests.yaml` of the release: 819 entries, run with libregrtest through `tests/test_pyodide_suite.py`, one guest process per test module as Pyodide's `test_cpython_core` does) on **both packagings**. The numbers come from the jobs `Pyodide suite / fused` and `Pyodide suite / dynamic` of the `Tests` workflow ([actions/workflows/tests.yml](https://github.com/natify-sh/pyodide-nojs/actions/workflows/tests.yml)), run of 2026-11-16 on Linux: **607 passed, 186 skipped, 30 xfailed, 0 failed of 823 results** (the 823 are the list's 819 entries plus a few tests of the harness itself), the same on both packagings; the jobs took 43 and 27 minutes (`-n auto`, one job per packaging, `timeout-minutes: 120`). The repository's own offline tests: **about 850 collected** (`CI=1 uv run pytest --collect-only -q -m "not network and not suite" tests | tail -1`, which counts each test per packaging where it is parametrized); CI (`tests.yml`) runs them on **Linux, Windows and macOS x Python 3.12 and 3.15**, plus the network tests (PyPI and jsDelivr: the host's fetch, the guest's TLS, `micropip`, numpy's wheel) and the suite. Not included: Pyodide's tests of the JavaScript API and `@run_in_pyodide` (they need a browser or Node).
 
-Why tests are skipped or xfail. In Pyodide's own list: 31 `xfail` entries (a whole module not run: `dbm` 7, `platform-specific` 3, "didn't correctly embed test data" 2, "nonsense" 2, `zoneinfo._zoneinfo` 2, slow/timeouts 2, and one each of other reasons) and `skip` globs in 56 modules (110 globs); one xfail module is replaced by our per-test record, which gives 30 xfailed. Many tests also skip themselves on Emscripten. Our own record, `tests/suite_overrides.yaml`, has 28 skip globs in 7 modules, each with its reason (count made by parsing the file):
+Why tests are skipped or xfail. In Pyodide's own list: 31 `xfail` entries (a whole module not run: `dbm` 7, `platform-specific` 3, "didn't correctly embed test data" 2, "nonsense" 2, `zoneinfo._zoneinfo` 2, slow or timing out 4, and one each of other reasons) and `skip` globs in 56 modules (110 globs); one xfail module is replaced by our per-test record, which gives 30 xfailed. Many tests also skip themselves on Emscripten. Our own record, `tests/suite_overrides.yaml`, has 28 skip globs in 7 modules, each with its reason (count made by parsing the file):
 
 | reason | skip entries | tests |
 |---|---|---|
@@ -300,8 +223,93 @@ What does not work, and what is deliberately different (the per-import list with
 * **Permission bits, owners and the umask** are kept by the adapter for the interpreter's lifetime (WASI has none); the umask is applied to new files (Pyodide on Node forwards it to the host process). `FD_CLOEXEC` is kept per descriptor as POSIX does (`os.get_inheritable` is False for what Python opens; Pyodide's is True). A pipe whose writers are all closed reads end of file (PIPEFS says EAGAIN). `system()` is `ENOSYS` (a host shell from the guest would be a way out of the sandbox). The length of a path is the host's.
 * **A C++ exception or a `longjmp` cannot cross a ctypes call or a callback** (the guest traps).
 * **No threads**: the guest has none, as in Pyodide; the library starts none. A host function must not wait for another thread.
-* **Start state** is Pyodide's own (`main()` through `__main_argc_argv`, `sys.executable`, `sys.path` with `''` first, `PYTHONINSPECT=1` mirrored) except where this README says otherwise.
+* **Start state** is Pyodide's own (`main()` through `__main_argc_argv`, `sys.executable`, `PYTHONINSPECT=1` mirrored) except where this README says otherwise, and except `sys.path`: the guest's `start()` puts `''` first and moves `/lib/python3.15/site-packages` before the standard library's zip, so `sys.path` is `['', '/lib/python3.15/site-packages', '/lib/python315.zip', '/lib/python3.15/lib-dynload']` (checked with `uv run pyodide-nojs -c "import sys; print(sys.path)"`). The reason and the side effect are in [TLS](#tls).
 * **Platforms**: Linux, Windows and macOS are CI-tested on Python 3.12 and 3.15; PyPy is untested; a host that cannot reserve 4 GiB of address space refuses `interrupt()`'s raw write.
+
+## Network and fetch
+Off by default; the flags are as in Wasmtime's `-S` and only control what the host lets the guest reach (they never choose a Pyodide feature: the real `ssl` is always there). `Pyodide(inherit_network=True, tcp=..., udp=..., dns=..., http=..., pyfetch=...)` are the API names.
+
+| flag | grants | denied looks like |
+|---|---|---|
+| `--tcp` | TCP sockets: create, connect, bind, listen, accept | `PermissionError` (EACCES) |
+| `--udp` | UDP sockets | `PermissionError` |
+| `--dns` | name lookup (a numeric address such as `127.0.0.1` resolves without it) | `socket.gaierror` `EAI_FAIL` |
+| `--http` | the host's fetch (used by `hostnet.install()` and `--pyfetch`) | an `OSError` that names `--http` |
+| `--inherit-network` | all four above | |
+| `--pyfetch` | grants nothing: installs the handler so that `urllib`, `urllib3` (`requests`) and `pyodide.http.pyfetch` send through the host's fetch (the host's proxies, DNS and trusted roots); needs `--http` | the fetch refuses without `--http` |
+
+Two ways to reach the network: **by default the guest's own sockets and TLS** (`micropip`, `urllib`, `requests` need `--tcp --dns`, which `--inherit-network` gives), the same in the REPL as in `-c` and files; or **`--pyfetch`** (with `--http` the guest needs no socket of its own). `import hostnet; hostnet.install()` does the same from a program. A download through the host's fetch is asked for in 1 MiB `Range` pieces (a server without ranges is read whole), so Ctrl-C is seen between pieces; `-v` logs every request with its URL and size.
+
+Details: the guest has no `AF_UNIX`: `socket.socketpair()` is a TCP pair over the host's `127.0.0.1` and needs `--tcp`. asyncio's default loop needs no flag (one thread, no self-pipe; its sockets need `--tcp`); a Ctrl-C in `await asyncio.sleep(30)` is taken within a few ms.
+
+**The guest is isolated.** Its environment is Pyodide's minimal one (`USER`/`LOGNAME=web_user`, `PATH=/`, `PWD=/`, `HOME=/home/pyodide` (the folder exists), `LANG=en_US.UTF-8`, `PYTHONINSPECT=1` as Pyodide's JavaScript sets it, `LD_LIBRARY_PATH`) plus `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` (both `/etc/ssl/cert.pem`, which the host fills with the CA bundle) and `env=`; nothing of the host's environment or files reaches it unless asked: `inherit_env=True` / `--inherit-env` (all variables, secrets included; `env=` wins; `PYTHONHOME`, `PYTHONPATH`, `LD_LIBRARY_PATH` are not taken), `mounts={"/data": "/host/dir"}` / `--mount`, `--mount-cwd`. The guest's `/` is a temporary folder; it starts in `/home/pyodide`. The time zone is the host's. `sys.executable` is `'/home/pyodide/this.program'` as in the browser (the file does not exist); `sys._emscripten_info.runtime` is `'pyodide-nojs <ver>'` here.
+
+`micropip` works with no JavaScript: the package carries `pyodide-lock.json` (31 packages: 27 of type `package`, 4 shared libraries), and in the guest `micropip` resolves a name in it first, downloads the wheel from `https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/` (sha256 checked) and unpacks it; a package not in the lock comes from PyPI; one already installed is not fetched again. The lock's `libopenssl` entry is Pyodide's own shared library (OpenSSL 1.1.1w, for `ctypes` users) and has nothing to do with the guest's `_ssl`. `micropip` 0.11.1 and `packaging` 26.1 are the release's wheels unpacked into `data/py` (sha256 checked against the lock), so a `site=` copy wins. scipy installs and runs (`scipy.linalg.det`). Installing needs HTTPS: the guest's own TLS or the host's fetch.
+
+## Using packages
+Pick by what you want:
+
+| you want | do |
+|---|---|
+| to try a package once | `await micropip.install("numpy")` in the REPL ([below](#try-a-package-in-the-repl-nothing-is-kept)) |
+| Pyodide's own packages (`numpy`, `scipy`, `cffi`...) kept between runs | a venv made by `pyodide venv`, then `--venv` ([below](#keep-packages-between-runs-a-pyodide-venv)) |
+| PyPI wheels built for Pyodide, kept, with no Node | plain `pip install --target`, then `--site` ([below](#without-pyodide-build-plain-pip)) |
+| your own files or folders | `--site DIR` (copied into the guest's site-packages) or `--mount GUEST=HOST` |
+
+### Try a package in the REPL (nothing is kept)
+```text
+$ pyodide-nojs --inherit-network --allow-top-level-await
+>>> import micropip
+>>> await micropip.install("numpy")        # Pyodide's own build, from its lock: about 10.7 MB from jsDelivr
+>>> import numpy; numpy.arange(5).sum()
+np.int32(10)
+```
+`--inherit-network` lets the guest open sockets and resolve names (see [Network and fetch](#network-and-fetch)); `--allow-top-level-await` allows `await` at the prompt. What `micropip` installs lives in the guest's temporary root and is gone when the run ends, so the next run downloads it again.
+
+### Keep packages between runs: a `pyodide venv`
+`pyodide venv` (from `pyodide-build`) makes a virtual environment for exactly this Pyodide and a `pip` that installs wheels for it, including Pyodide's own `numpy`. It needs Node.js and a host Python 3.15 (see the first lines below), only for making the venv and installing; running the packages needs neither.
+```sh
+uv python install 3.15                   # a host Python 3.15, which `pyodide venv` needs
+uv venv --python 3.15 .pyodide-tools     # the environment that pyodide-build goes into
+uv pip install --python .pyodide-tools/bin/python pyodide-build==0.39.3   # this version pairs with the pinned Pyodide; do not use another
+PATH=.pyodide-tools/bin:$PATH pyodide venv .venv-pyodide   # downloads the matching cross-build environment (network, an archive of about 8 MB): a venv for Python 3.15
+.venv-pyodide/bin/pip install numpy requests          # the venv's own pip (Windows: .venv-pyodide\Scripts\pip, not tested)
+pyodide-nojs --venv .venv-pyodide
+```
+The package is not on PyPI yet, so `pip install 'pyodide-nojs[venv]'` is not an alternative to the `uv pip install` line; from a release's wheel the same version is asked for by `pip install './pyodide_nojs-<ver>-py3-none-any.whl[venv]'`. (`uv python install` and `uv venv --python` are `uv`'s own commands; any host Python 3.15 does as well.)
+```text
+>>> import numpy, requests
+>>> numpy.arange(5).sum()
+np.int32(10)
+```
+Importing needs no flag. `requests.get(...)` needs `--inherit-network` ([Network and fetch](#network-and-fetch)), and `--allow-top-level-await` is needed only if you type `await` at the prompt.
+
+`--venv DIR` (API: `Pyodide(venv=DIR)`) is the venv's **root**; it finds the site-packages itself and copies it into the guest at every start (a big venv slows the start: keep only what you need). It checks the venv: a venv of another Python is an error, a package built for another Python or Pyodide is a warning that names it (pure-Python packages work anywhere). Packages with C code (`numpy`) load through the same `dlopen` as in Pyodide.
+
+Instead of the venv's `pip`, `uv` installs into the venv: `uv pip install --python .venv-pyodide/bin/python --no-build --extra-index-url file://<xbuildenv>/pyodide-root/package_index --index-strategy unsafe-best-match numpy` (checked: numpy 2.4.3 installed), where `<xbuildenv>` is `~/.cache/pyodide-build/.pyodide-xbuildenv-<hash>/315.0.0a2/xbuildenv`; the hash is in that folder's name, and a shell glob does not work inside a `file://` URL, so look at `ls ~/.cache/pyodide-build/`. `uv` cannot make the venv itself: its Pyodide interpreters stop at Python 3.14.2 (`uv python list --all-versions --all-platforms | grep -i emscripten`).
+
+### Without pyodide-build: plain pip
+Wheels for Pyodide's platform that PyPI hosts (PEP 783, tag `pyemscripten_2026_5_wasm32`) install into a folder with pip 26 or newer, on any host Python and with no Node; `--site` then copies the folder into the guest:
+```sh
+pip install --target pkgs --platform pyemscripten_2026_5_wasm32 --python-version 3.15 --implementation cp --abi cp315 \
+    --only-binary=:all: py_ballisticcalc.exts py_ballisticcalc
+pyodide-nojs --site pkgs -c "import py_ballisticcalc_exts, py_ballisticcalc; print(py_ballisticcalc.__version__)"
+```
+Pyodide's own packages (`numpy`...) are not on PyPI, so this way cannot install them: use `micropip` or a `pyodide venv`.
+
+### When it does not work
+| what you see | why | what to do |
+|---|---|---|
+| `ModuleNotFoundError` after `--site DIR` | DIR is the venv's root, or an empty folder: `--site` copies a folder as it is | `--venv .venv-pyodide`, or `--site .venv-pyodide/lib/python3.15/site-packages` |
+| `--venv: the virtual environment is for Python 3.14` | the venv was made for another Pyodide (for example with `uv`: it knows only the Pyodide of Python 3.14) | make it with `pyodide venv` of `pyodide-build==0.39.3` |
+| `emscripten does not support processes` while installing `numpy` with `uv pip install --python .venv-pyodide/bin/python` | `uv` does not read the venv's `pip.conf` (only-binary and the index of Pyodide's own packages), so it builds `numpy` from source | use `.venv-pyodide/bin/pip install numpy` |
+| `unrecognized arguments: --venv` | an older checkout | update the repository or the wheel |
+| a warning "holds packages built for another Python or Pyodide" | wheels of another ABI (for instance `numpy` of Pyodide 314) | install them again with the venv's own `pip` |
+| `PermissionError` or `gaierror -4` while `micropip` installs | the network is off by default | add `--inherit-network` |
+
+Checked: `tests/test_venv_real.py` (`six` and `numpy` 2.4.3, Pyodide's own build from the xbuildenv's package index, in a venv made by `pyodide venv`, on both packagings; run `CI=1 uv run pytest -q tests/test_venv_real.py` after `sh tools/prepare_testenv.sh pyo-build`). Checked by hand, with no test: `py_ballisticcalc_exts` 3.1.1 (a native PyPI wheel) in a `pyodide venv`, and through plain pip, which was pip 26.3. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a venv that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS.
+
+Pyodide's own `python` command (a drop-in for the native one: `-c`, a file, `-m`; Node.js 20+, not sandboxed, from the `pyodide-core` release archive, `pyodide venv`, or `uv python install` of Pyodide's CPython with its package index) is the reference for what a command line should do. `pyodide-nojs` takes the same three (`-c`, a file, `-m`); it needs no Node, and the network and the host's files are closed unless granted.
 
 ## Build, run and test it yourself
 The wasm is built, not committed (`src/pyodide_nojs/data/` is ignored; CI builds it). One toolchain builds our own wasm: **wasi-sdk 34's clang** (`adapter.wasm`, `wasm-opt.wasm`); the exception is the guest's `_ssl` (above). Node and npm's Binaryen (`wasm-opt`, `wasm-merge`, binaryen.js) are build tools only.
@@ -330,6 +338,7 @@ A missing build is a skip locally and a failure with `CI` set. `PYODIDE_SUITE_RU
 | `PYODIDE_NOJS_DATA` | the folder of the wasm files (default: the package's `data/`) |
 | `PYODIDE_NOJS_FLAVOR` | `fused` or `dynamic` (default `dynamic`) |
 | `PYODIDE_NOJS_SNAPSHOT` | `0` turns the `preload=` snapshot off |
+| `PYODIDE_NOJS_BUILD` | tests only: the work folder of the build whose `testenv/` the tests read (numpy, the venv, `python_tests.yaml`), default `pyo-build` |
 | `PYODIDE_NOJS_ASM_WASM`, `PYODIDE_NOJS_STDLIB` | another `pyodide.asm.wasm` or `python_stdlib.zip` (imply `dynamic`) |
 | `WASM_OPT` | the converter of a wheel's legacy exceptions at `dlopen`: a `wasm-opt.wasm` (run in-process) or a command line such as `wasm-opt`; default the package's `wasm-opt.wasm` |
 | `WASM_OPT_WASM` | build only: a built `wasm-opt.wasm` for `tools/build_data.sh` to reuse |
@@ -352,9 +361,9 @@ MIT for this repository. The wheel carries binaries under their own licenses: Py
 src/pyodide_nojs/        the host (Python) and the guest-side files in guest/
 src/pyodide_nojs/data/   built wasm and the lock, tls/, py/ (ignored by git; in the wheel)
 wasm/                    the adapter: adapter.c and adapter/*.h
-tools/                   the build: fetch, build_data, build_adapter, build_binaryen, build_ssl, prepare_testenv, fuse.py, patch_main.mjs, audit_imports.py
+tools/                   the build: fetch, build_data, build_adapter, build_binaryen, build_ssl, prepare_testenv, fuse.py, patch_main.mjs, bundle_py.py, add_memory_export.py; audit_imports.py; diff_pyodide.py and diff_probes/ (the comparison with Pyodide)
 tests/                   offline, network and the official suite, each on both packagings; suite_overrides.yaml
-docs/                    HOST_CONTRACT.md, IMPORT_AUDIT.md and import_audit.json, DIFFERENCES.md (the differences from Pyodide)
+docs/                    HOST_CONTRACT.md, IMPORT_AUDIT.md and import_audit.json, DIFFERENCES.md (the differences from Pyodide), OPENSSL_VERSION.md
 licenses/                the texts of the licenses of the bundled binaries and NOTICE
 .github/workflows/       build, tests, pre-commit, publish
 package.json             the pinned Pyodide and Binaryen

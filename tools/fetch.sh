@@ -1,7 +1,7 @@
 #!/bin/sh
 # Pinned sources for the build, into WORKDIR (each download is checked by SHA-256 or a tag):
 #   sh tools/fetch.sh WORKDIR
-#   WORKDIR/sdk/wasi-sdk-34.0-x86_64-linux   the one clang/wasm-ld/cmake toolchain every wasm here is built with
+#   WORKDIR/sdk/wasi-sdk-34.0-x86_64-linux   the one clang/wasm-ld/cmake toolchain every wasm here is built with (except the guest's `_ssl`: tools/build_ssl.sh)
 #   WORKDIR/dl/pyodide, WORKDIR/dl/binaryen  npm packages (Node + Binaryen are BUILD tools; the run time has neither)
 #   WORKDIR/dl/dist                          the files of Pyodide's 315.0.0a2 release (wheels, `test`, lock)
 set -e

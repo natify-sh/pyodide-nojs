@@ -1,7 +1,8 @@
-"""Offline: the errno and path answers of the file calls (B4b, W3), on both packagings. The expected values are what
+"""Offline: the errno and path answers of the file calls, on both packagings. The expected values are what
 the real Pyodide 315.0.0-alpha.2 on Node printed for the same scripts; where a comment says Linux, Pyodide's answer is a
 defect of its own (it strips a slash that Linux refuses, takes "" for the descriptor, crashes on an access mode of 3)
-and Linux's is kept. The refusals of the mutating calls on /dev and /proc are the W2 design (BACKLOG), not Pyodide's."""
+and Linux's is kept. The refusals of the mutating calls on /dev and /proc are the adapter's own design (a read-only
+virtual tree), not Pyodide's."""
 
 from __future__ import annotations
 
