@@ -39,11 +39,17 @@ EXPORT("__syscall_unlinkat") i32 sc_unlinkat(i32 dirfd, const char *path, i32 fl
     // rmdir("d/"), rmdir("d//"): the slashes are not part of the name (Linux; WASI's path_remove_directory says EINVAL for them)
     if (flags & 0x200)
         while (n > 1 && p[n - 1] == '/') n--;
-    if (flags & 0x200) {  // the last component decides, as on Linux: "." is EINVAL, ".." is ENOTEMPTY (a Windows host says EACCES)
-        i32 s = n;
-        while (s > 0 && p[s - 1] != '/') s--;
-        if (n - s == 1 && p[s] == '.') return -FE_INVAL;
-        if (n - s == 2 && p[s] == '.' && p[s + 1] == '.') return -FE_NOTEMPTY;
+    if (flags & 0x200) {  // the last component of the path as given decides, as on Linux: "." is EINVAL, ".." is ENOTEMPTY (a Windows host says EACCES)
+        i32 e = slen(path), s;
+        while (e > 1 && path[e - 1] == '/') e--;
+        for (s = e; s > 0 && path[s - 1] != '/'; s--) {}
+        i32 dots = e - s == 1 && path[s] == '.' ? FE_INVAL : e - s == 2 && path[s] == '.' && path[s + 1] == '.' ? FE_NOTEMPTY : 0;
+        u64 fs[8];
+        char *pre = dots && s > 0 ? dupn(path, (u32)s) : 0;  // the prefix is looked at first: its own error (ENOENT, ENOTDIR)
+        e = pre ? fx_real(dirfd, pre, 1, fs) : 0;
+        free(pre);
+        if (e) return -e;
+        if (dots) return -dots;
     }
     u64 key[2];
     i32 doomed = meta_doomed(fd, p, n, key);

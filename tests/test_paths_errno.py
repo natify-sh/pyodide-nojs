@@ -107,6 +107,9 @@ os.mkdir('e')
 _r = (err(os.rmdir, 'd/.'), err(os.rmdir, 'd/..'), err(os.rmdir, 'e/./'), err(os.rmdir, '..'), err(os.rmdir, './.'))
 assert _r == ('EINVAL', 'ENOTEMPTY', 'EINVAL', 'ENOTEMPTY', 'EINVAL'), _r
 assert os.path.isdir('d') and os.path.isdir('e')
+# the prefix is looked at first, as on Linux
+_r = [err(os.rmdir, x) for x in ('missing/.', 'missing/..', 'f/.', 'f/..', 'd/./.', 'missing/./')]
+assert _r == ['ENOENT', 'ENOENT', 'ENOTDIR', 'ENOTDIR', 'EINVAL', 'ENOENT'], _r
 os.rmdir('e')
 os.rmdir(os.path.join(W, 'd') + '/')  # absolute, too
 assert not os.path.exists('d')

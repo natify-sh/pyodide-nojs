@@ -206,8 +206,15 @@ class Net:
         self._netlog.append(f"socket connect {addr[0]}:{addr[1]}")
         return 0
 
+    def _take_err(self, s: socket.socket) -> int:
+        """The error of a refused connect that poll has read, given once to the first send or receive (-errno or 0)."""
+        err = self._pending_err.pop(s, 0)
+        return werr(OSError(err, "")) if err else 0
+
     def _n_sendto(self, h: int, p: int, n: int, flags: int, sa: int, salen: int) -> int:
         s = self._socks[h]
+        if err := self._take_err(s):
+            return err
         try:
             hf = msg_flags(flags)
             data = self.guest.rd(p, n)
@@ -219,6 +226,8 @@ class Net:
             return werr(e)
 
     def _n_recvfrom(self, h: int, p: int, n: int, flags: int, sa: int, lenp: int) -> int:
+        if err := self._take_err(self._socks[h]):
+            return err
         try:
             data, addr, ret, _ = recv(self._socks[h], n, flags)
         except OSError as e:
@@ -229,6 +238,8 @@ class Net:
 
     def _n_sendmsg(self, h: int, msg: int, flags: int) -> int:
         s = self._socks[h]
+        if err := self._take_err(s):
+            return err
         try:
             name, namelen, iovs, ctllen = msghdr(self.guest.rd, msg)
             if ctllen:  # SCM_RIGHTS, SCM_CREDENTIALS...: nothing can carry them to the host
@@ -243,6 +254,8 @@ class Net:
             return werr(e)
 
     def _n_recvmsg(self, h: int, msg: int, flags: int) -> int:
+        if err := self._take_err(self._socks[h]):
+            return err
         name, _namelen, iovs, _ctllen = msghdr(self.guest.rd, msg)
         try:
             data, addr, ret, mflags = recv(self._socks[h], sum(n for _, n in iovs), flags)
@@ -299,7 +312,7 @@ class Net:
             )
             if s in self._pending_err:
                 g |= 8
-            elif s in self._connecting and g & 20 and not g & 1:
+            elif s in self._connecting and g & 20 and not g & 9:  # POLLERR: the kernel keeps SO_ERROR for the operation
                 # a refused connect: Linux says POLLERR|POLLHUP|POLLOUT, macOS only POLLHUP. SO_ERROR is cleared by the
                 # read, so it is kept for the guest's own getsockopt(SO_ERROR), once, as the kernel would give it
                 self._connecting.discard(s)

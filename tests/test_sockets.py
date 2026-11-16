@@ -645,3 +645,36 @@ def test_host_errors_are_translated_by_name_on_every_os():
     assert guest_errno(errno.EWOULDBLOCK) == guest_errno(errno.EAGAIN) == 6
     assert guest_errno(errno.ECONNREFUSED) == 14 and guest_errno(errno.EINPROGRESS) == 26
     assert guest_errno(999999) == guest_errno(None) == 29  # unknown: EIO
+
+
+REFUSED = """
+def seq():
+    t = socket.socket(); t.bind(('127.0.0.1', 0)); dead = t.getsockname(); t.close()
+    out = []
+    for first in ('poll', 'sleep'):
+        for op in ('send', 'recv', 'so_error'):
+            s = socket.socket(); s.setblocking(False); s.connect_ex(dead)
+            if first == 'poll':
+                p = select.poll(); p.register(s, select.POLLOUT); p.poll(1000)
+            else:
+                time.sleep(0.2)
+            r = []
+            for o in ((op, 'send', 'recv', 'so_error') if op != 'so_error' else ('so_error', 'send')):
+                try:
+                    so = socket.SOL_SOCKET, socket.SO_ERROR
+                    v = s.send(b'x') if o == 'send' else s.recv(10) if o == 'recv' else s.getsockopt(*so)
+                    r.append((errno.errorcode[v] if v else 0) if o == 'so_error' else 'ok')
+                except OSError as e:
+                    r.append(errno.errorcode[e.errno])
+            out.append((first, op, r))
+    return out
+"""
+
+
+def test_a_refused_non_blocking_connect_reports_its_error_once(guest: Guest, port: int):
+    """send and recv after the refused connect give the error once and clear it, as the host's own sockets do."""
+    ns: dict = {}
+    exec("import socket, select, time, errno\n" + REFUSED, ns)
+    want = ns["seq"]()
+    out = run(guest, port, REFUSED + "print(seq())")
+    assert out == [str(want)], (out, want)
