@@ -76,9 +76,8 @@ Checked with pip 26.3 on both packagings (`py_ballisticcalc_exts` 3.1.1, a nativ
 
 **`pyodide venv`** (from `pyodide-build`: it needs Node.js and a host Python 3.15, only to make the venv) gives a virtual environment whose `pip` is patched for Pyodide's platform and has Pyodide's own index, so it also installs `numpy`:
 ```sh
-pip install pyodide-build==0.39.3        # the version that pairs with the pinned Pyodide
-pyodide xbuildenv install 315.0.0a2
-pyodide venv .venv-pyodide
+pip install pyodide-build==0.39.3        # the version that pairs with the pinned Pyodide (as tools/build_ssl.sh uses it, in a Python 3.15)
+pyodide venv .venv-pyodide               # fetches the matching cross-build environment itself and makes a venv for Python 3.15
 .venv-pyodide/bin/pip install numpy six
 pyodide-nojs --venv .venv-pyodide -c "import numpy; print(numpy.__version__)"
 ```
