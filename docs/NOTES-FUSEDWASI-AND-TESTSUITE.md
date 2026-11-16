@@ -1,7 +1,18 @@
 # Notes: fusedwasi as the host, and Pyodide's official test suite
 
-Two next steps for this experiment, not done here. Facts are marked as either checked (in the fusedwasi
-repository at `v0.1.0b3` = `5e0d354`, and in Pyodide's repository at tag `315.0.0a2` = `c47e555`) or as
+> **Status: planning notes of 2026-11-10, partly done; kept as the plan (checked 2026-11-16).**
+> * Part 2(a), CPython's own tests of Pyodide's suite on both packagings, **is done**: `tests/test_pyodide_suite.py` (with
+>   `tests/suite_overrides.yaml`; one job per packaging in `.github/workflows/tests.yml`). The rest of part 2 (the `@run_in_pyodide` tests,
+>   `test_python_socket.py`, the package tests) is **not done**.
+> * Part 1 (fusedwasi in place of `net`) is **not started**; BACKLOG.md section 9 holds what is planned for WASI 0.2 and says fusedwasi
+>   cannot be used on component hosts. Part 3 (not a component, for now) still stands.
+> * The counts in the tables below are those of the experiment day. Today the fused module has 71 imports (33 `wasi_snapshot_preview1`,
+>   16 `loader`, 19 `net`, 3 `fs`) and the host has 38 operations (`net.resolve` is gone); see [HOST_CONTRACT.md](HOST_CONTRACT.md). The
+>   runner is `src/pyodide_nojs/` (`run_pyodide_adapter.py` and `run_tests.py` of the experiment are gone), the adapter is
+>   `wasm/adapter.c` with `wasm/adapter/*.h`.
+
+Two next steps for this experiment, written before they were started. Facts are marked as either checked (in the fusedwasi repository at its
+tag `v0.1.0b3`, commit `5e0d354` of that third-party repository, and in Pyodide's repository at its tag `315.0.0a2`, commit `c47e555` there) or as
 estimates.
 
 ## 1. fusedwasi 0.1.0b3: WASI 0.2 imported by a core module, on wasmtime-py
@@ -19,9 +30,9 @@ estimates.
 | today | with fusedwasi |
 |---|---|
 | WASI 0.1: wasmtime's built-in WASI | WASI 0.1 and 0.2: fusedwasi (`State`, `Guest`), one state |
-| `net.*`: 9 operations of our own in Python (socket, connect, send, recv, poll, close, shutdown, name, resolve) | gone: the adapter calls `wasi:sockets/tcp-create-socket`, `tcp` (start/finish-connect, the two streams), `ip-name-lookup`, `wasi:io/poll`, `wasi:io/streams` |
+| `net.*`: 9 operations of our own in Python on the day of the notes (socket, connect, send, recv, poll, close, shutdown, name, resolve); 19 today (see HOST_CONTRACT.md) | gone: the adapter calls `wasi:sockets/tcp-create-socket`, `tcp` (start/finish-connect, the two streams), `ip-name-lookup`, `wasi:io/poll`, `wasi:io/streams` |
 | the host's fetch (urllib in the runner) behind `hostnet.fetch` | optional: `wasi:http/outgoing-handler` (the twin has TLS through `ssl`); the guest's own TLS (`_ssl`) needs only the sockets |
-| fused module imports `wasi_snapshot_preview1` (27), `net` (9), `loader` (4) | `wasi_snapshot_preview1`, `wasi:*@0.2.6`, `loader` (4) |
+| fused module imports `wasi_snapshot_preview1` (27), `net` (9), `loader` (4) (that day; 33, 19, 16 and `fs` 3 today) | `wasi_snapshot_preview1`, `wasi:*@0.2.6`, `loader` (4) |
 
 - **The loader stays the one import of our own:** instantiate, sym, got_set, call, which is `dlopen` of a wheel at run time. Neither WASI 0.2 nor the component model has it: a component cannot instantiate a new core module while it runs.
 - **The socket code moves from the Python host into the adapter (C).** This is the same job Wasmtime's preview1 adapter does (0.1 calls over 0.2 imports), here from Emscripten's syscalls.
@@ -60,7 +71,7 @@ All counts were checked in `pyodide` at `315.0.0a2`. The suite has three kinds o
   - Sockets are real host sockets, not the node bridge.
   - `ssl` is real (Pyodide's is a stub, so `test_ssl` is meaningful here).
   - There are no threads (as in Pyodide).
-  - Signals: the adapter has no `raise`.
+  - Signals: the adapter had no `raise` on the day of the notes; it has one now (`wasm/adapter/signals.h`: `raise()` calls the handler Python set).
 
 **b) Tests decorated with `@run_in_pyodide`: applicable with a small backend.**
 
@@ -95,6 +106,6 @@ The question was whether to aim at hosts that run WASI 0.2 components (Fastly Co
 - Pyodide's `env` imports are Emscripten's JavaScript glue (263 functions). They are not WIT interfaces. The adapter answers them inside the module; what stays outside is `wasi_snapshot_preview1`, `loader` and `net`.
 - `dlopen` of a wheel at run time instantiates a **new core module**. A component cannot do that. This is the reason the host owns the loader, and it is the capability that stock CPython for WASI lacks (WASI has no `dlopen`): the project's advantage is exactly here, so a component target would give it up.
 
-**What is open (an idea, not done).** `pyodide_fused.wasm` is already a wrapper that shows the `env` imports differently outward: it has its own memory and table and imports only WASI, `loader` and `net`. To become a component it would need (1) `net` replaced by `wasi:sockets`/`wasi:http` (section 1 above), (2) `loader` removed by **baking the chosen wheels into the module at build time** (the technique of `tools/fuse.py`: assign `__memory_base`/`__table_base` and table slots, fill the GOT, run relocations and constructors at start, `_dlopen_js` answered from a built-in registry), and (3) a `wit-component` wrapper with a small `wasi:cli/run` or `wasi:http` entry. Unknown until tried: whether `wit-component` accepts a core module with GC and function references (the trampoline uses `ref.test`/`call_ref`) and `exnref` exceptions; whether the table has room; the size against a host's limits. A quick check that costs minutes: `wasm-tools component new` on `pyodide_fused.wasm` with `loader`/`net` stubbed, to see what it rejects. The result would still be a build-time set of wheels, with no `dlopen` in the run time on those hosts.
+**What is open (an idea, not done).** `pyodide_fused.wasm` is already a wrapper that shows the `env` imports differently outward: it has its own memory and table and imports only WASI, `loader`, `net` and (today) `fs`. To become a component it would need (1) `net` replaced by `wasi:sockets`/`wasi:http` (section 1 above), (2) `loader` removed by **baking the chosen wheels into the module at build time** (the technique of `tools/fuse.py`: assign `__memory_base`/`__table_base` and table slots, fill the GOT, run relocations and constructors at start, `_dlopen_js` answered from a built-in registry), and (3) a `wit-component` wrapper with a small `wasi:cli/run` or `wasi:http` entry. Unknown until tried: whether `wit-component` accepts a core module with GC and function references (the trampoline uses `ref.test`/`call_ref`) and `exnref` exceptions; whether the table has room; the size against a host's limits. A quick check that costs minutes: `wasm-tools component new` on `pyodide_fused.wasm` with `loader`/`net` stubbed, to see what it rejects. The result would still be a build-time set of wheels, with no `dlopen` in the run time on those hosts.
 
 For a CPython that components can run (`wasm32-wasip2`, wheels built for WASI), see the tip in the numpy PoC notes of wasmhost (`examples/pyodide_wasmtime/NUMPY.md`): a different project with its own wheels, not this one.

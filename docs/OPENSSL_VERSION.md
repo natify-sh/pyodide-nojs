@@ -1,21 +1,30 @@
 # The OpenSSL of the guest's TLS: where it stands and whether we can go higher
 
-Research report, 2026-11-11. No code of the repository was changed; everything measured was built in a scratch
-directory. Purpose: the argument for an upstream proposal to Pyodide when pyodide-nojs reaches alpha.
-Sources are URLs, files, or the command that produced the number; what could not be verified is in the last section.
+> **Status: a research report, as of 2026-11-11; not a description of what ships.** What the repository does today (checked 2026-11-16):
+> `tools/build_ssl.sh` builds CPython 3.15.0rc1's `_ssl` against the lock's shared `libopenssl` 1.1.1w, for the test environment only
+> (`tools/prepare_testenv.sh` puts it into `testenv/site_tls`); the wheel carries no `_ssl` and no OpenSSL, and `licenses/NOTICE` lists none.
+> Route (c) below (a static OpenSSL 3.5.9 in `_ssl.so`) is a prototype that was built and run for this report and is **not** in the repository.
+> **Two findings of the report are out of date**: the host's `/dev` is not mounted any more (`--dev`, `preopen_dev` are gone: the adapter
+> serves a virtual `/dev`, whose `urandom` reads the libc's `getentropy`, `wasm/adapter/dev.h`), and 1.1.1w now seeds without it (checked:
+> `ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)` is created on the fused build with no `--dev`); so the "needs the host's `/dev`" entries and the
+> "no more host `/dev`" gain below no longer hold. And the `--site` folder now comes before the stdlib zip on `sys.path` (section 7). The
+> numbers of section 3 are those of the day, from a prototype that is gone; the version, CVE and support-window facts of sections 1, 2 and 4
+> were not re-checked (the network sources were not reachable then or now).
 
-> **Historical measurement:** measured when the host's `/dev` was mounted with `--dev`, since removed (the adapter serves a virtual `/dev`, BACKLOG W2).
+Research report, 2026-11-11. No code of the repository was changed; everything measured was built in a scratch
+folder outside the repository. Purpose: the argument for an upstream proposal to Pyodide when pyodide-nojs reaches alpha.
+Sources are URLs, files, or the command that produced the number; what could not be verified is in the last section.
 
 ## Summary
 
 | route | effort | blocks | evidence |
 |---|---|---|---|
-| **today**: `_ssl` of CPython 3.15.0rc1 (ours) over the lock's `libopenssl` 1.1.1w (shared, Emscripten-built) | done | 1.1.1 has been end-of-life since 2023-09-11; no `group()`, `get_groups()`, `get_sigalgs()`, no ML-KEM/PQ; needs the host's `/dev` (`--dev`) for entropy | `tools/build_ssl.sh`, `tools/prepare_testenv.sh`; probe below: `OpenSSL 1.1.1w  11 Sep 2023` |
+| **today**: `_ssl` of CPython 3.15.0rc1 (ours) over the lock's `libopenssl` 1.1.1w (shared, Emscripten-built) | done | 1.1.1 has been end-of-life since 2023-09-11; no `group()`, `get_groups()`, `get_sigalgs()`, no ML-KEM/PQ (re-checked 2026-11-16: `get_groups()` raises `NotImplementedError ... requires OpenSSL 3.5 or later`); (the host's `/dev` for entropy, said here on 2026-11-11, is no longer needed) | `tools/build_ssl.sh`, `tools/prepare_testenv.sh`; probe below: `OpenSSL 1.1.1w  11 Sep 2023` |
 | (a) wait for Pyodide's `libopenssl` bump | unknown (weeks to never) | Pyodide's repo still has 1.1.1w **shared** (`pyodide/pyodide` main `packages/libopenssl/meta.yaml`); the 3.x one lives in `pyodide-recipes` as a **static** library for other packages; `ssl`/`_hashlib` are disabled in Pyodide 314+; open issue #6540 proposes AWS-LC instead | sections 1, 3a |
 | **(c) static OpenSSL 3.5.9 LTS into our `_ssl.so`** | **done as a prototype, about 1 day to productise** (build script, CI, NOTICE, a few tests) | none found; one unexplained trap in `ssl.get_sigalgs()` | built here: 342 s with `-j2` under load 12; `_ssl.so` 3.58 MB; `ssl.OPENSSL_VERSION` is `OpenSSL 3.5.9 29 Sep 2026` in the guest; TLS 1.3 to pypi.org and a local TLS server on **both** packagings |
 | (b) OpenSSL 3.x as shared `libssl.so` + `libcrypto.so` side modules, wasi-sdk-built | 2 to 4 days (a link recipe, `-shared` export lists, NEEDED handling); gains nothing over (c) for us, but is the shape a Pyodide package needs if several modules share it | needs `--experimental-pic -shared` linking of a large archive and the export list of the OpenSSL API (Emscripten's `EMULATE_FUNCTION_POINTER_CASTS`-like issues not met) | the same objects link as a static part today; the shared link was **not** tried |
 | (d) another TLS library for `_ssl` | not feasible for the real `_ssl`; AWS-LC only | CPython's `_ssl.c` and `_hashopenssl.c` speak the OpenSSL API; only AWS-LC (and LibreSSL, partly) are API-compatible | CPython `_ssl.c` `OPENSSL_IS_AWSLC` branches; discuss.python.org thread 44505; Pyodide issue #6540 |
-| **fallback: host TLS shim** (a guest `_ssl` in Python, TLS state machine on the host's `ssl`) | about 600 lines of Python + about 150 lines of host code, 1 to 2 weeks with tests | host's OpenSSL differs per platform; API fidelity is partial; no new wasm | prototype in the scratch dir: handshake with a local TLS server, hostname check enforced by the host (section 6) |
+| **fallback: host TLS shim** (a guest `_ssl` in Python, TLS state machine on the host's `ssl`) | about 600 lines of Python + about 150 lines of host code, 1 to 2 weeks with tests | host's OpenSSL differs per platform; API fidelity is partial; no new wasm | a prototype (not kept): handshake with a local TLS server, hostname check enforced by the host (section 6) |
 
 ## 1. What Pyodide builds, and why 1.1.1w
 
@@ -89,7 +98,7 @@ Files fetched from `raw.githubusercontent.com/python/cpython/<tag>/...` (`v3.15.
 
 ## 3. Routes to a newer OpenSSL, with what was measured
 
-Toolchain and recipe used (all in `/tmp/claude-0/.../scratchpad/openssl_research/build`): wasi-sdk 34 clang (`clang 23`) from
+Toolchain and recipe used (in a build folder outside the repository, not kept): wasi-sdk 34 clang (`clang 23`) from
 `pyo-build/sdk`, target `wasm32-unknown-emscripten`, the Emscripten 6.0.5 musl headers sysroot that `tools/build_ssl.sh` already assembles, and
 `wasm/ssl_prelude.h`; OpenSSL **3.5.9** (release tag `openssl-3.5.9`, 29 Sep 2026, sha256
 `603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a` of the tarball as downloaded from the GitHub release):
@@ -130,8 +139,8 @@ for its sockets in our case (it passes the fd through `SSL_set_fd`, and our gues
   * `tests/checks/tls_check.py` (HTTPS to pypi.org by the guest's own sockets and TLS, urllib): `handshake TLSv1.3 TLS_AES_256_GCM_SHA384 | peer cert subject CN: pypi.org`, `raw response: HTTP/1.1 200 OK`, `urllib 200 six` (fused).
   * Local TLS server on 127.0.0.1 (host thread, self-signed cert with a SAN): handshake OK on fused (25 ms) and dynamic (56 ms), echo OK, and
     `ssl.SSLCertVerificationError: Hostname mismatch, certificate is not valid for 'wrong.example'` (so verification, including hostname, works; same with 1.1.1w, 80 ms).
-  * **No host `/dev` needed**: 3.5.9 seeds from `getentropy` (WASI `random_get` through the adapter). With 1.1.1w the same script without `--dev`/`preopen_dev`
-    fails in `SSLContext(PROTOCOL_TLS_CLIENT)` with `ssl.SSLError: [SSL] malloc failure` (RAND init cannot read `/dev/urandom`). This is a practical gain: the guest no longer needs the host's `/dev` for TLS.
+  * **No host `/dev` needed** (measured on 2026-11-11, **no longer a difference**): 3.5.9 seeds from `getentropy` (WASI `random_get` through the adapter). With 1.1.1w the same script without `--dev`/`preopen_dev`
+    failed in `SSLContext(PROTOCOL_TLS_CLIENT)` with `ssl.SSLError: [SSL] malloc failure` (RAND init could not read `/dev/urandom`); since the adapter serves a virtual `/dev` with a working `urandom`, 1.1.1w creates the context with no flag (checked 2026-11-16).
   * `ssl.create_default_context()` takes 0.1 s in the guest (loads the CA bundle found by default paths: `cert_store_stats` 122 CAs here).
   * New features visible: `SSLContext.get_groups()` lists `MLKEM512/768/1024`, `X25519MLKEM768`, `SecP256r1MLKEM768`, `SecP384r1MLKEM1024`; `get_ciphers()` 17; `set_ciphersuites` works. (`set_ecdh_curve("X25519MLKEM768")` is refused by CPython's EC-curve path; hybrids go through `set_groups`, not exercised.)
   * **Unexplained**: `ssl.get_sigalgs()` (calls `SSL_get1_builtin_sigalgs(NULL)`) **traps** with a memory fault (`wasm address 0x70000057`) inside `_ssl_get_sigalgs`
@@ -182,7 +191,7 @@ Position: the shared `libopenssl` 1.1.1w in `pyodide/pyodide` is end-of-life and
 
 What we ask (smallest first):
 1. **Replace the 1.1.1w recipe of `libopenssl`** (shared, for `_ssl`) by the 3.x **static-into-`_ssl`** layout, or at least **bump the shared one to 3.5 LTS**. The `pyodide-recipes` recipe is the starting point; we add `-fPIC -fvisibility=hidden`, drop `no-legacy`-class features (list in 3(c)), and keep `no-threads`, `no-dso`, `no-engine`, `no-module`.
-2. **Offer an optional `_ssl` package** (a Pyodide package built from CPython's own `Modules/_ssl.c`, as `pyodide-build` side module) next to the stub, so runtimes with sockets (Node, wasmtime-py, wasmtime/wasmer hosts) can load the real one and browsers do not pay the size. This reverses nothing of PR #6044 (the main module stays small); it only needs the stub `ssl.py` not to shadow the real one when the package is installed (our `tools/build_ssl.sh` puts CPython's `Lib/ssl.py` ahead of the stdlib zip; in the current tree a `--site` folder did not win over the zip stub without a `sys.path.insert`, see section 7).
+2. **Offer an optional `_ssl` package** (a Pyodide package built from CPython's own `Modules/_ssl.c`, as `pyodide-build` side module) next to the stub, so runtimes with sockets (Node, wasmtime-py, wasmtime/wasmer hosts) can load the real one and browsers do not pay the size. This reverses nothing of PR #6044 (the main module stays small); it only needs the stub `ssl.py` not to shadow the real one when the package is installed (our `tools/build_ssl.sh` puts CPython's `Lib/ssl.py` ahead of the stdlib zip; on 2026-11-11 a `--site` folder did not win over the zip stub without a `sys.path.insert`, see section 7: fixed since).
 3. **Do not block on AWS-LC (#6540)**: our measurement gives the numbers it needs for OpenSSL 3.5.9 (below), so the comparison can be made on data.
 
 What we can offer: the build recipe (`tools/build_ssl.sh` plus the OpenSSL configure line), a wasi-sdk 34 clang build (one toolchain, no Emscripten installation needed: the Emscripten sysroot headers suffice), and tests: TLS 1.3 handshake, CA verification, hostname-mismatch refusal, urllib/micropip over TLS on the two packagings, a local-TLS-server test needing no network.
@@ -195,7 +204,7 @@ Claims and the measurement behind each (all from section 3):
 | CPython 3.15's own `_ssl.c` compiles and runs against it | `ssl.OPENSSL_VERSION` `3.5.9` in the guest, `HAS_TLSv1_3`, 17 ciphers, ML-KEM groups listed |
 | It works on both packagings | local TLS server + pypi.org: fused and dynamic |
 | Size cost | full: 3.58 MB (1.14 MB gzip) vs 1.99 MB (0.81 MB gzip) today; trimmed 2.96 MB (0.97 MB gzip) |
-| No more host `/dev` for entropy | 1.1.1w without `--dev`: `malloc failure`; 3.5.9: works |
+| (No more host `/dev` for entropy) | true on 2026-11-11 only: 1.1.1w without `--dev` gave `malloc failure`, 3.5.9 worked; with the virtual `/dev` both work |
 | Not free of problems | `get_sigalgs()` traps (undiagnosed) |
 
 ## 6. Fallback: host TLS shim
@@ -236,7 +245,7 @@ The host's `ssl` is whatever the host Python links: Linux distro (system OpenSSL
 
 ### 6.5 Prototype and measurement
 
-`/tmp/claude-0/-home-user/d2f0afe1-78de-56d0-b524-a430e24fc186/scratchpad/openssl_research/proto/shim_proto.py` (74 lines): a local TLS echo server on 127.0.0.1 (host thread, self-signed certificate with SAN `localhost`, `127.0.0.1`), a `Pyodide` subclass that overrode `_net_fetch` when the fetch was a method of `Pyodide` (the existing generic host op was reused; since the split the fetch is `Net.fetch`, bound at `_start`, so a subclass can no longer override it that way) and keeps the `SSLObject`s, and guest code (`hostnet.fetch` as the op channel, the guest's own `socket`) that runs the pump. Result (fused, this machine):
+A throw-away script of 74 lines (not kept in the repository): a local TLS echo server on 127.0.0.1 (host thread, self-signed certificate with SAN `localhost`, `127.0.0.1`), a `Pyodide` subclass that overrode `_net_fetch` when the fetch was a method of `Pyodide` (the existing generic host op was reused; since the split the fetch is `Net.fetch`, bound at `_start`, so a subclass can no longer override it that way) and keeps the `SSLObject`s, and guest code (`hostnet.fetch` as the op channel, the guest's own `socket`) that runs the pump. Result (fused, this machine):
 
 ```
  handshake ms 28 ['TLSv1.3', ['TLS_AES_256_GCM_SHA384', 'TLSv1.3', 256], [[['commonName', 'localhost']]]]
@@ -255,14 +264,14 @@ That is two connections (one good, one with a wrong `server_hostname`) with 22 h
 | Portability | identical on all hosts (the wasm carries its own TLS) | same | differs per host: OpenSSL version, Windows/macOS store, FIPS builds |
 | API fidelity | full `_ssl` (CPython's own C code); passes the same checks as today | full, minus 3.x features | partial: no sockets-level features (`SSL_set_fd`, PHA, keylog, sessions, sigalgs, server side initially) |
 | Effort | about 1 day productise + the `get_sigalgs` trap | 0 | 1 to 2 weeks (+ risk of long tail of `test_ssl`) |
-| Needs the host `/dev` | no | yes (`--dev`) | no |
+| Needs the host `/dev` (as of 2026-11-11; no longer for any column) | no | yes (`--dev`) | no |
 | Works with the project's rules (one toolchain, no run-time Node, both packagings) | yes (wasi-sdk 34 clang) | yes | yes (no wasm) |
 
 Recommendation (a guess from the above): ship route (c) as the default real TLS (smaller effort, full fidelity, security fixed by version), keep the host shim only as a documented fallback for environments that cannot carry the 3.6 MB (or trimmed) wasm; the existing `hostnet` fetch (HTTPS by the host's urllib) already covers "just fetch" users.
 
 ## 7. Side findings
 
-* In this working tree (data built 2026-11-11 11:54, `testenv/site_tls` from 2026-11-10), `python -m pyodide_nojs --flavor fused --dev --site .../site_tls -c "import ssl; ..."` gives `OpenSSL (stub)` and `/lib/python315.zip/ssl.py`: the `--site` folder copied into `site-packages` comes **after** the stdlib zip on `sys.path` (`['', '/lib/python315.zip', '/lib/python3.15/lib-dynload', '/lib/python3.15/site-packages']`) while the zip now contains Pyodide's stub `ssl.py` and `_ssl.py`. `tests/test_checks.py::test_the_guests_own_tls` expects the real one, so this is either a stale `python_stdlib.zip` or a regression of the `build_ssl.sh` comment "a folder that comes before the stdlib zip"; I worked around it with `sys.path.insert(0, '/lib/python3.15/site-packages')` (not investigated, network tests were not run by me against the repository's test suite).
+* On 2026-11-11 (data built that morning, `testenv/site_tls` from the day before), `python -m pyodide_nojs --flavor fused --dev --site .../site_tls -c "import ssl; ..."` gave `OpenSSL (stub)` and `/lib/python315.zip/ssl.py`: the `--site` folder copied into `site-packages` came **after** the stdlib zip on `sys.path` while the zip contained Pyodide's stub `ssl.py` and `_ssl.py`; it was worked around with `sys.path.insert(0, '/lib/python3.15/site-packages')`, the cause not investigated. **Fixed since** (checked 2026-11-16): `sys.path` is `['', '/lib/python3.15/site-packages', '/lib/python315.zip', '/lib/python3.15/lib-dynload']`, and with `--site pyo-build/testenv/site_tls` `ssl.__file__` is `/lib/python3.15/site-packages/ssl.py` and `ssl.OPENSSL_VERSION` is `OpenSSL 1.1.1w  11 Sep 2023`.
 * The sandbox's egress proxy presents a certificate for **any** SNI name, so `wrap_socket(..., server_hostname="wrong.example")` to pypi.org "succeeds" here with both builds (the peer certificate's SAN is the requested name). That is not a bug of the guest: the local-server test above (hostname mismatch refused by both 1.1.1w and 3.5.9) is the valid check; `tests/checks/tls_check.py`'s last step ("hostname check works") is not asserted by `tests/test_checks.py` (`TLS` patterns) and cannot pass through such a proxy.
 
 ## 8. What I could not verify

@@ -1,15 +1,24 @@
 # MEMFS_SCOPE: an in-memory root ported from Pyodide's MEMFS, and the mounts as a port of NODEFS
 
+> **Status: a study, parked (as of 2026-11-11; the owner's decision, BACKLOG.md D4).** The guest's root stays a folder on the host's disk;
+> nothing in this file is built. The current design is in the README ("The guest is isolated": the root is a temporary host folder made by
+> `Pyodide._setup_root`, a host folder is given with `mounts=` / `--mount`, WASI preopens) and in `BACKLOG.md` (D4, D5, D13). What changed
+> since the study, checked 2026-11-16: the adapter is 4,268 lines (`wasm/adapter.c` and `wasm/adapter/*.h`; the study counted 3,371) and
+> `adapter.wasm` is 86,907 bytes (72 KB then); the guest's descriptor numbers are decoupled from WASI's (D5 done: the "own fd table" row
+> of section 2 exists already); the host's `/dev` is gone, the adapter serves a virtual `/dev` (W2 done); the per-section line counts and the
+> N/L/W rows below are those of 2026-11-11, `docs/DIFF_AUDIT_*.md` and BACKLOG.md have the current state of each row. Keep this file for
+> the cost and the numbers for the day the question comes back.
+
 A study (2026-11-11, an independent reviewer agent, read-only; nothing was built). **Decision of the owner: parked** (BACKLOG.md D4): the root
-stays on the host's disk because no win was seen for now. This file keeps the cost and the numbers for the day the question comes back.
+stays on the host's disk because no win was seen for now.
 Every timing was taken on 4 shared cores with a load average of 10.5-12 and varied up to 4x between runs: ratios are indicative; quiet-machine
-numbers are still to be measured. The probes are in the scratchpad of that session (`memfs/`: `imports.py`, `storm.py`, `dir5000.py`, `big.py`,
-`mem.mjs`, `hostcall.py`).
+numbers are still to be measured. The probes (an import count, a syscall storm, a 5000-entry directory, a 100 MB file, a memory probe on Node,
+a host-call timing) were throw-away scripts of that session and are not in the repository.
 
 ## Short answer
 The port fits the adapter's rules (no data section, no own stack, state in malloc'd blocks). MEMFS itself is small; the cost is the generic file
 system layer it needs (path lookup, its own fd table and streams, a mount table). **+1,700 to +2,600 lines of C with WASI mounts kept**: the adapter
-(3,371 lines now) goes to about 5,100-6,000. A port of MEMFS alone does not make the guest look like Pyodide: the port must reproduce `FS` and
+(3,371 lines when the study was made; 4,268 on 2026-11-16) goes to about 5,100-6,000 (the study's figure, from 3,371). A port of MEMFS alone does not make the guest look like Pyodide: the port must reproduce `FS` and
 `SYSCALLS` of the glue too.
 
 ## 1. What MEMFS is in the glue (pyodide.asm.mjs, 315.0.0a2)
@@ -38,12 +47,12 @@ system layer it needs (path lookup, its own fd table and streams, a mount table)
 | mount dispatch (a path under a mount goes to the WASI preopen with the rest of the path; today's code becomes the "wasi" backend) | 80-150 | `lookupPath` returns (backend, preopen fd, rest) |
 | `dlopen` `read_file` and mmap from the VFS | 40-80 | |
 
-Totals: new code 1,900-2,900; removed or shrunk 150-300; **net +1,700 to +2,600**; `adapter.wasm` (72 KB now) about +50-100 KB (an estimate).
+Totals: new code 1,900-2,900; removed or shrunk 150-300; **net +1,700 to +2,600**; `adapter.wasm` (72 KB then) about +50-100 KB (an estimate).
 
 Per section of `wasm/adapter/*.h` with a VFS root and WASI mounts: common.h (113) unchanged; state.h (80) preopens stay, the cookie table goes to the VFS stream; cwd.h (49) replaced by a node-based cwd; metadata.h (171) not needed for the root, stays only if mounts keep recorded modes; openfiles.h (741) `resolve`/`fixpath`/`phys` (~400) become the mount backend only, `put_stat`/`fcntl`/`lseek` get a VFS branch; writes.h (385) every call gets a VFS branch, `rel_target`/`relink` (~150) only for mounts; vfd.h (308) numbering rewritten (~110 out, ~150-250 in), pipes (~120) unchanged; mmap.h (151) about unchanged; owners.h (119) small change; loader.h (684) `read_file` gets dispatch; sockets.h (331) the routed `fd_*` (~60) dispatch on the new kind; time.h, signals.h, log.h, ffi.h unchanged. Fused and dynamic: one source, no difference found.
 
 ## 3. The host side
-* `_setup_root` (about 25 lines) and the temporary folder disappear; `/lib/python3.15/lib-dynload`, `/tmp`, `/home/pyodide`, `/etc` are created through the API at start; `run()` writes `_pw_N.py`/`.rc` into the root today (N38): with a VFS the code goes through guest memory or `/tmp` and the status comes back from memory; `_probe`/`_save` read the root on the host (with a VFS the files are part of memory); `_preopen_dir` and `fs.statvfs` stay for mounts; `cli.py` reads `py.root / "_repl"` (needs an API read); `tests/test_files.py` uses `py.root` twice.
+* `_setup_root` (about 25 lines) and the temporary folder disappear; `/lib/python3.15/lib-dynload`, `/tmp`, `/home/pyodide`, `/etc` are created through the API at start; `run()` writes `_pw_N.py`/`.rc` into the root today (N38): with a VFS the code goes through guest memory or `/tmp` and the status comes back from memory; `_probe`/`_save` read the root on the host (with a VFS the files are part of memory); `_preopen_dir` and `fs.statvfs` stay for mounts; `_cli.py` reads `py.root / "_repl"` (needs an API read); `tests/test_files.py` uses `py.root` twice.
 * The host API a MEMFS root needs, modelled on Pyodide's (`pyodide.FS`: `writeFile`, `readFile`, `mkdir`, `mkdirTree`, `readdir`, `stat`, `unlink`, `rename`, `symlink`, `mount`/`unmount`, `analyzePath`; `unpackArchive`; `mountNodeFS`; `loadPackage`): methods on `Pyodide` that call the adapter's existing syscall exports with guest-malloc'd buffers (about 150-250 Python lines, no new adapter exports): `write_file`/`read_file` (about 4 guest calls per file, 0.1-0.3 ms), `mkdir`, `listdir`, `stat`, `unlink`, `rename` (one or two calls), `put_tree`/`get_tree` (N files x the above; 5,000 files about 1 s per start, an estimate), `import_archive`/`export_archive`, `site=`/wheels (a 30 MB wheel: 30 MB written, then the unpacked size lives in memory), `mounts=` unchanged.
 * Snapshots: the VFS is in linear memory, a snapshot captures it as is (a preload that writes files could be snapshotted; the "files changed" rule of `_save` could go); the snapshot grows by the VFS size; `site=` could stop disabling snapshots.
 * Start-up: writing the 3 MB zip is 1-5 ms of copying; our start-and-exit took 1.3-1.8 s, Pyodide's `loadPyodide` 6.3-8.3 s (measured).

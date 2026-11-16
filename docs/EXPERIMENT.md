@@ -1,12 +1,24 @@
-> **History.** This is the write-up of the experiment (2026-11-10, from wasmhost) the package grew out of. It says "not in CI" and
-> names scripts (`prepare.sh`, `run_tests.py`, `run_pyodide_adapter.py`...) that are now `tools/*.sh`, `tests/` and `src/pyodide_nojs/`;
-> see the README for the current state. The mechanics below are unchanged.
-
-> **Historical measurement:** measured when the host's `/dev` was mounted with `--dev`, since removed (the adapter serves a virtual `/dev`, BACKLOG W2).
+> **Status: historical, as of 2026-11-10.** This is the write-up of the experiment (from wasmhost) the package grew out of; the
+> source of truth now is the [README](../README.md), [BRIEF.md](../BRIEF.md), `CLAUDE.md` and [HOST_CONTRACT.md](HOST_CONTRACT.md).
+> The mechanics below (the adapter's rules, the two packagings, `wasm-opt.wasm` in-process, the guest's own TLS) still hold, but
+> the details were not kept up to date. What differs today (checked 2026-11-16 against the code and the built wasm):
+>
+> * **Names**: `prepare.sh`, `run_tests.py`, `run_pyodide_adapter.py`, `build.sh`, `wasmtools.py` and `hostnet.py` are now `tools/fetch.sh`,
+>   `tools/build_data.sh`, `tools/prepare_testenv.sh`, `tests/`, `src/pyodide_nojs/` (`_host.py`, `_engine.py`...), `tools/build_adapter.sh`,
+>   `_engine.translate_to_exnref` and `src/pyodide_nojs/guest/hostnet.py`. The commands under "Reproduce" and "Usage" do not run any more
+>   (use the README); the check programs are in `tests/checks/` and run by `tests/test_checks.py`, in CI.
+> * **The adapter** is `wasm/adapter.c`, one translation unit that includes `wasm/adapter/*.h` (about 4,270 lines in all, not 1,200).
+> * **The fused module** has 71 imports: 33 `wasi_snapshot_preview1`, 16 `loader`, 19 `net`, 3 `fs` (not 27/4/9); the host operations are
+>   38 in all (`net.resolve` is gone). The adapter answers more than the 49 `env` imports counted below (111 exports; 91 of the 264 `env`
+>   imports of `pyodide.asm.wasm`). The list is in HOST_CONTRACT.md.
+> * **Toolchain**: every wasm we build now uses wasi-sdk 34's clang, the `_ssl` and the adapter included (the table "Toolchain" names
+>   Ubuntu's clang 18 for them: the state of the experiment day).
+> * **The host's `/dev`** is not mounted any more (`--dev`, `PREOPEN_DEV` are gone): the adapter serves a virtual `/dev`. The measurements
+>   that say "`PREOPEN_DEV=1`" are of the day before that.
 
 # Pyodide without JavaScript: the Emscripten glue as wasm (experiment, 2026-11-10)
 
-Not a goal and not part of wasmhost: an experiment of what is possible, by hand on Linux, **not in CI**.
+Not a goal and not part of wasmhost: an experiment of what is possible, by hand on Linux, **not in CI** (it is in CI now: `.github/workflows/`).
 It continues `docs/experiments/pyodide_nojs/` of wasmhost (2026-11-05/06), where a Python host answered
 every import of `pyodide.asm.wasm`. Here the Emscripten `env` glue is moved into wasm, after the shape of
 Wasmtime's `wasi_snapshot_preview1` adapter: system calls, the dynamic loader, libffi's calls, sockets, time,
