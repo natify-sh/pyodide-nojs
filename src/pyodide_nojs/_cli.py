@@ -21,26 +21,23 @@ CWD_MOUNT = "/host"  # where --mount-cwd puts the host's current folder
 # The REPL's console lives in the guest (state between lines); the host reads the lines (readline, or prompt_toolkit
 # when installed) and pushes each one. The guest tells the host in /_repl whether the line needs more.
 SETUP = """\
-import ast, code, types
+import ast, asyncio, code, types
 
 
 class Console(code.InteractiveConsole):
     def __init__(self, aw):
         super().__init__(__import__("__main__").__dict__)
-        self.net = False
-        if aw:  # top-level await, as in Pyodide's REPL: on hostnet's loop (no JavaScript, no threads)
+        self.runner = None
+        if aw:  # top-level await, as in Pyodide's REPL: on asyncio's default loop (one thread, no self-pipe)
             self.compile.compiler.flags |= ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
     def runcode(self, c):
         try:
             r = types.FunctionType(c, self.locals)()
-            if isinstance(r, types.CoroutineType):
-                import hostnet  # imported by the preload (the snapshot); install() patches urllib: only now
-
-                if not self.net:
-                    self.net = True
-                    hostnet.install()
-                r = hostnet.run(r)
+            if isinstance(r, types.CoroutineType):  # one loop for the session, as asyncio's `python -m asyncio`
+                if self.runner is None:
+                    self.runner = asyncio.Runner()
+                r = self.runner.run(r)
         except SystemExit:
             raise
         except BaseException:
@@ -48,7 +45,7 @@ class Console(code.InteractiveConsole):
 
 
 _console = Console({aw})
-import asyncio, hostnet  # in the snapshot, so that the first `await` is fast
+import asyncio, hostnet  # in the snapshot (hostnet: for --pyfetch and for `hostnet.install()` typed at the prompt)
 """
 # the banner is the host's: a preload must not print (it would print at snapshot time only)
 BANNER = 'import sys; print("Python " + sys.version.split()[0] + " on wasmtime (Pyodide {v})")'
@@ -226,7 +223,15 @@ def main(argv: list[str] | None = None) -> int:
     net.add_argument("--tcp", action="store_true", help="TCP sockets (client and server)")
     net.add_argument("--udp", action="store_true", help="UDP sockets")
     net.add_argument("--dns", action="store_true", help="name lookup (numeric addresses always work)")
-    net.add_argument("--http", action="store_true", help="the host's fetch (hostnet.install(), micropip)")
+    net.add_argument(
+        "--http", action="store_true", help="the host's fetch (hostnet.install() or the guest's own fetch)"
+    )
+    net.add_argument(
+        "--pyfetch",
+        action="store_true",
+        help="urllib, urllib3 (requests, micropip) and pyodide.http.pyfetch send through the host's fetch, not the "
+        "guest's own sockets and TLS; only installs the handler: the fetch needs --http (or --inherit-network)",
+    )
     ap.add_argument("--data", metavar="DIR", help="the wasm files (default: the package's, or $PYODIDE_NOJS_DATA)")
     ap.add_argument(
         "--asm-wasm",
@@ -297,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         udp=ns.udp,
         dns=ns.dns,
         http=ns.http,
+        pyfetch=ns.pyfetch,
     ) as py:
         call = guest_caller(py)
         call(py.run, "pass")  # the start (it can be long): a Ctrl-C during it is delivered to the program that follows

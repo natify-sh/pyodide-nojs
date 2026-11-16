@@ -18,6 +18,15 @@ if os.path.exists(LOCK):
 
     pyodide_lock.hook(LOCK, LOCK_BASE)
 
+# urllib3 on emscripten injects a backend of JavaScript's fetch/XHR; here it keeps its socket backend (the guest has
+# sockets and a real `_ssl`) unless `hostnet.install()` (--pyfetch) takes the host's fetch in its place
+import types
+
+_u3 = types.ModuleType("urllib3.contrib.emscripten")
+_u3.inject_into_urllib3 = lambda: None  # pyright: ignore[reportAttributeAccessIssue]
+_u3._nojs_default = True  # pyright: ignore[reportAttributeAccessIssue]
+sys.modules.setdefault("urllib3.contrib.emscripten", _u3)
+
 import pyodide_nojs_asyncio  # pyright: ignore[reportMissingImports]
 
 pyodide_nojs_asyncio.hook()

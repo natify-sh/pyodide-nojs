@@ -1,18 +1,19 @@
-"""Networking for Pyodide without JavaScript (guest side).
+"""The host's fetch for the guest (guest side): HTTP(S) done by the host, as a browser's `fetch` or wasi:http.
 
-Pyodide's `_ssl` is a stub (its browser build has no OpenSSL in the main module), so TLS cannot run in the
-guest; as in a browser (`fetch`) or with WASI 0.2 (`wasi:http`), the host does HTTP(S). The guest reaches the
-host's `fetch` through ctypes (a table slot the host wrote to `_hostnet_slots`; `ffi_call_js` is in the
-adapter). On top of it:
+The guest has sockets and a real `_ssl` of its own (`--tcp --dns`); this module is the other way, chosen with
+`--pyfetch` (or `hostnet.install()` typed by the program): the host sends the request, with its own proxies, DNS and
+trusted roots, and the guest gets the status, headers and body. The guest reaches the host's `fetch` through ctypes (a
+table slot the host wrote to `_hostnet_slots`; `ffi_call_js` is in the adapter). On top of it:
 
-* `fetch(url, method, headers, body)`: the call itself;
+* `fetch(url, method, headers, body)`: the call itself; a plain GET is asked for in 1 MiB pieces (see `_ranged`);
 * `pyfetch`: `pyodide.http.pyfetch` with its FetchResponse API (`status`, `ok`, `headers`, `url`,
   `bytes()`, `string()`, `text()`, `json()`, `memoryview()`, `raise_for_status()`), and `open_url`;
 * a urllib handler for http and https, installed globally, so `urllib.request.urlopen` works (micropip
   outside the browser fetches with it);
-* `run(coro)`: an asyncio loop with no I/O (from before the guest had socketpair; `asyncio.run` works now).
+* a module in the place of `urllib3.contrib.emscripten.fetch` (which needs JavaScript), so `requests` works;
+* `run(coro)`: an asyncio loop with no I/O of its own.
 
-`install()` puts the first three in place; `fetch` and `run` work without it.
+`install()` puts the first four in place; `fetch` and `run` work without it.
 """
 
 import asyncio
@@ -267,7 +268,12 @@ def install():
     except ImportError:
         pass
     urllib.request.install_opener(urllib.request.build_opener(HostHandler))
-    _sys.modules.setdefault("urllib3.contrib.emscripten.fetch", _u3)
+    stub = _sys.modules.get("urllib3.contrib.emscripten")
+    if getattr(
+        stub, "_nojs_default", False
+    ):  # the start's no-op: urllib3's own emscripten backend takes the fetch below
+        del _sys.modules["urllib3.contrib.emscripten"]
+    _sys.modules["urllib3.contrib.emscripten.fetch"] = _u3
 
 
 def native():

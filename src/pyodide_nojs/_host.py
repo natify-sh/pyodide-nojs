@@ -105,7 +105,11 @@ class Pyodide:
     (wasmtime's ``-S`` model) switch the host's world on: ``tcp`` / ``udp`` (sockets of that type; ``socketpair()``
     is a TCP pair over the host's loopback, so it needs ``tcp``; asyncio's default loop needs nothing), ``dns``
     (name lookup; numeric addresses always resolve), ``http`` (the host's fetch, used by ``hostnet``),
-    ``inherit_network`` (all of them).
+    ``inherit_network`` (all of them). ``pyfetch`` only installs the handler that puts the host's fetch in the
+    place of the guest's own sockets and TLS: ``pyodide.http.pyfetch``, ``urllib`` and ``urllib3`` (so ``requests``
+    and ``micropip``) send through the host (``hostnet.install()``, as in a preload). It grants nothing: the fetch
+    itself needs ``http`` (or ``inherit_network``), else it is an ``OSError`` that names ``--http``. Without
+    ``pyfetch`` they use the guest's sockets and ``_ssl`` (which need ``tcp`` and ``dns``).
     A denied socket is ``PermissionError`` (EACCES), a denied lookup ``gaierror`` EAI_FAIL, a denied fetch an
     ``OSError`` that names the flag.
 
@@ -135,6 +139,7 @@ class Pyodide:
         udp: bool = False,
         dns: bool = False,
         http: bool = False,
+        pyfetch: bool = False,
     ) -> None:
         wt = _engine.require_wasmtime()
         self._wt = wt
@@ -180,7 +185,7 @@ class Pyodide:
                     raise FileNotFoundError(f"{what} folder not found: {f}{TESTENV_HINT}")
         self.env = dict(env or {})
         self.inherit_env = inherit_env
-        self.preload = preload
+        self.preload = preload if not pyfetch else (preload or "") + "import hostnet\nhostnet.install()\n"
         self.restored = False  # the guest came from a snapshot
         self._net_slots: tuple[int, int] = (0, 0)
         opt = os.environ.get("WASM_OPT") or wasm_opt or self.data / "wasm-opt.wasm"
