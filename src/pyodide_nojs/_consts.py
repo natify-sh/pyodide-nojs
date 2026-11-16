@@ -36,6 +36,7 @@ BASE_ENV = [
     ("PWD", "/"),
     ("HOME", "/home/pyodide"),
     ("LANG", "en_US.UTF-8"),
+    ("PYTHONINSPECT", "1"),  # set by Pyodide's JavaScript: sys.flags.inspect is 1
     ("LD_LIBRARY_PATH", f"/usr/lib:/lib/python{PYVER}/site-packages"),
 ]
 # What the interpreter reads at start only: removed from os.environ once it runs, as in Pyodide (which sets them in its

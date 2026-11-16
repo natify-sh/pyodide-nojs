@@ -123,3 +123,12 @@ print([hasattr(libc, n) for n in ("exit", "__assert_fail", "emscripten_get_heap_
     r = guest.run(code)
     assert r.returncode == 0, r.stderr
     assert r.stdout.splitlines() == ["[True, True, True, True]"]
+
+
+def test_an_assert_with_a_pointer_beyond_the_memory_prints_what_it_can(guest: Guest) -> None:
+    """R10: the glue's UTF8ToString reads past the end of the heap as an empty string; it never traps while printing."""
+    r = guest.run(
+        ASSERT.replace('b"x == 1", b"file.c", 42, b"func"', 'c.c_void_p(0x7FFFFFFF), b"f", 1, c.c_void_p(0xFFFFFFF0)')
+    )
+    assert r.returncode == 134
+    assert "Aborted(Assertion failed: , at: f,1,)\n" in r.stderr

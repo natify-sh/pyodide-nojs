@@ -191,12 +191,12 @@ print(sys.dont_write_bytecode, sys.flags.inspect, sys.prefix)
 import _pyodide_core
 """
 # Pyodide's own values (the real 315.0.0a2 on Node: executable and orig_argv are the script's path there, the web has
-# Emscripten's default thisProgram "./this.program"; PYTHONINSPECT=1 of Pyodide's JavaScript is not mirrored)
+# Emscripten's default thisProgram "./this.program")
 STARTUP_WANT = [
     "/home/pyodide/this.program /home/pyodide/this.program ['./this.program'] ['']",
     "['', '/lib/python315.zip', '/lib/python3.15/lib-dynload'] /lib/python315.zip /home/pyodide []",
     "/lib/python315.zip/zipimport.py /lib/python315.zip/zipimport.py /lib/python315.zip/os.py",
-    "True 0 /",
+    "True 1 /",
 ]
 
 

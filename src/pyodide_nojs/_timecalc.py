@@ -113,8 +113,15 @@ def t_mktime(rd: Reader, wr: Writer, tm: int) -> int:
     if abs(u) > _DATE_LIMIT:
         return -1
     guessed = minutes(u)
-    winter, summer = year_minutes(_civil_from_days((u + gmtoff(u)) // 86400)[0])
+    cy = _civil_from_days((u + gmtoff(u)) // 86400)[0]
+    winter, summer = year_minutes(cy)
     dst_off, std_off = max(winter, summer), min(winter, summer)
+    jan = _js_make(cy, 0, 1, 0, 0, 0)
+    if jan is None or abs(utc_from_local(jan)) > _DATE_LIMIT:  # JS: new Date(year, 0, 1) is Invalid, winterOffset NaN
+        if dst > 0:  # (dst > 0) != (NaN == guessed): the shift is NaN, mktime fails
+            return -1
+        dst_off = std_off = guessed + 1  # never the guess: the same as isdst=0 (and -1 gives 0)
+        winter = summer
     if dst < 0:
         dst = int(summer != winter and dst_off == guessed)
     elif (dst > 0) != (dst_off == guessed):

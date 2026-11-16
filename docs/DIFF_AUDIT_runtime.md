@@ -125,3 +125,5 @@ The audit's entries `_gmtime_js`, `_timegm_js`, `_localtime_js`, `_tzset_js`, `e
 * `resource` (`getrlimit`, `getrusage`, `getpagesize`): the module cannot be imported on either side, so the matrix of
   the brief is empty for it; through ctypes only `getpagesize`/`sysconf(30)` were compared (equal).
 * Pyodide's own `loadPackage` of cffi: the wheel was unpacked and put on `sys.path` (NODEFS) for Pyodide, as the brief allowed.
+
+**Fixed (R7, R10, R11):** `PYTHONINSPECT=1` is in `BASE_ENV` (`sys.flags.inspect` is 1, as on Pyodide); `__assert_fail` strings end at the end of the memory, as `UTF8ToString` does (N11: no trap while printing, same text as Pyodide); `mktime` with isdst>0 in a year whose Jan 1 is an Invalid Date (-271821) is an OverflowError (N1).

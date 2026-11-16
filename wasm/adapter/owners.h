@@ -83,6 +83,7 @@ EXPORT("_emscripten_system") i32 sc_system(const char *cmd) { return cmd ? -52 :
 // abort() and a failed assert() end the program with the message of the JavaScript glue (Aborted(...)) on stderr and a
 // trap. The text is built from integer constants (no data section).
 static void err_n(const void *s, i32 n) {
+    if (n <= 0) return;
     u32 iov[2];
     iov[0] = (u32)s, iov[1] = (u32)n;
     i32 w;
@@ -93,11 +94,19 @@ static void err_lit(i32 n, u64 a, u64 b, u64 c, u64 d) {  // the first n bytes o
     m[0] = a, m[1] = b, m[2] = c, m[3] = d;
     err_n(m, n);
 }
+// The glue's UTF8ToString reads a typed array: past its end that is undefined, and the string ends. The same here: a
+// string ends at the end of the memory (a pointer beyond it is an empty string), never a trap.
+static i32 mem_slen(const char *p) {
+    u64 end = (u64)__builtin_wasm_memory_size(0) * 65536, a = (u32)p;
+    i32 n = 0;
+    while (a + (u64)n < end && p[n]) n++;
+    return n;
+}
 EXPORT("__assert_fail") void sc_assert_fail(const char *cond, const char *file, i32 line, const char *func) {
     err_lit(26, 0x28646574726f6241ull, 0x6f69747265737341ull, 0x64656c696166206eull, 0x203aull);  // "Aborted(Assertion failed: "
-    if (cond) err_n(cond, slen(cond));
+    if (cond) err_n(cond, mem_slen(cond));
     err_lit(6, 0x203a7461202cull, 0, 0, 0);  // ", at: "
-    if (file) err_n(file, slen(file));
+    if (file) err_n(file, mem_slen(file));
     else err_lit(16, 0x206e776f6e6b6e75ull, 0x656d616e656c6966ull, 0, 0);  // "unknown filename"
     err_lit(1, 0x2cull, 0, 0, 0);  // ","
     char num[12];
@@ -108,7 +117,7 @@ EXPORT("__assert_fail") void sc_assert_fail(const char *cond, const char *file, 
     if (line < 0) num[--k] = '-';
     err_n(num + k, 12 - k);
     err_lit(1, 0x2cull, 0, 0, 0);
-    if (func) err_n(func, slen(func));
+    if (func) err_n(func, mem_slen(func));
     else err_lit(16, 0x206e776f6e6b6e75ull, 0x6e6f6974636e7566ull, 0, 0);  // "unknown function"
     err_lit(2, 0xa29ull, 0, 0, 0);                                         // ")\n"
     __builtin_trap();

@@ -113,7 +113,7 @@ def test_guest_environment_is_pyodides_and_isolated(guest: Guest, monkeypatch: p
     assert "WASMHOST_TEST_SECRET" not in r.stdout and "hunter2" not in r.stdout and "/host/home" not in r.stdout
     names = eval(keys)  # noqa: S307  (our own output)
     assert {k for k, _ in BASE_ENV} <= set(names)
-    assert not {"PYTHONHOME", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "PYTHONINSPECT"} & set(names)
+    assert not {"PYTHONHOME", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"} & set(names)
     assert home == "/home/pyodide /home/pyodide web_user ['/']"
     p = eval(path)  # noqa: S307
     assert p == ["", "/lib/python315.zip", "/lib/python3.15/lib-dynload", "/lib/python3.15/site-packages"]
@@ -228,3 +228,21 @@ print(os.listdir('/') != [], os.path.exists('/lib'), os.close(os.open('/tmp', 0)
     assert lines[-1] == "True True True"
     # the others are as for a free number
     assert all(ln.endswith("EBADF") for ln in lines[:-1]), lines
+
+
+def test_mktime_of_the_first_year_with_isdst_is_an_overflow_and_inspect_is_set(guest: Guest) -> None:
+    """R11: Jan 1 of year -271821 is an Invalid Date in JS, so isdst=1 fails (-1, OverflowError), isdst=0/-1 do not.
+    R7: PYTHONINSPECT=1 of Pyodide's JavaScript (sys.flags.inspect is 1)."""
+    code = (
+        "import time, sys, os\n"
+        "for d in (1, 0, -1):\n"
+        "    try:\n        print(d, time.mktime((-271821, 6, 15, 12, 0, 0, 0, 0, d)))\n"
+        "    except OverflowError as e:\n        print(d, 'OverflowError', e)\n"
+        "print(sys.flags.inspect, os.environ['PYTHONINSPECT'])\n"
+    )
+    r = guest.run(code)
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    assert lines[0] == "1 OverflowError mktime argument out of range"
+    assert lines[1] == lines[2].replace("-1 ", "0 ") and lines[1].startswith("0 -8639")
+    assert lines[3] == "1 1"
