@@ -335,7 +335,7 @@ print(stat.S_ISCHR(os.fstat(1).st_mode))
 
 
 def test_site_folders_come_before_the_stdlib_zip(guest: Guest, tmp_path: Path) -> None:
-    """CI of cb1f608: a `site=` folder's real `_ssl` lost to the stub `_ssl.py` of the stdlib zip when site-packages
+    """Regression: a `site=` folder's real `_ssl` lost to the stub `_ssl.py` of the stdlib zip when site-packages
     was last. With `site=` they come first (as before); without it the order is Pyodide's."""
     (tmp_path / "colorsys.py").write_text("MARK = 'from the site folder'\n")
     code = "import sys, colorsys; print(sys.path[1:3]); print(getattr(colorsys, 'MARK', None))"
@@ -373,7 +373,7 @@ def test_a_site_folders_pyodide_nojs_run_does_not_hijack_the_run(guest: Guest, t
 
 
 def test_frozen_modules_follow_the_stdlib_dir(guest: Guest) -> None:
-    """CI of cb1f608: `sys._stdlib_dir` is the zip (as Pyodide's), but the frozen modules were laid out under
+    """Regression: `sys._stdlib_dir` is the zip (as Pyodide's), but the frozen modules were laid out under
     /lib/python3.15 at init; a fresh import of importlib (the tests of importlib do it) asserted they agree."""
     code = """
 import sys, zipimport

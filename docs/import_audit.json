@@ -44,7 +44,7 @@
   "class": "runtime",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c sc_assert_fail: 'Aborted(Assertion failed: <cond>, at: <file>,<line>,<func>)' on stderr ('unknown filename'/'unknown function' for NULL, a signed line), then a trap (rc 134). Probe ctypes __assert_fail(b'x == 1', b'file.c', 42, b'func') and (None, None, -7, None): both messages identical to Pyodide. Found by dlsym in the dynamic packaging too (the adapter's exports are added to the main module's)",
+  "evidence": "adapter.c sc_assert_fail: 'Aborted(Assertion failed: <cond>, at: <file>,<line>,<func>)' on stderr ('unknown filename'/'unknown function' for NULL, a signed line), then a trap (rc 134); a string pointer that lies outside the memory (or runs to its end) is read only up to the end of the memory (mem_slen), not trapped on. Probe ctypes __assert_fail(b'x == 1', b'file.c', 42, b'func') and (None, None, -7, None): both messages identical to Pyodide. Found by dlsym in the dynamic packaging too (the adapter's exports are added to the main module's)",
   "tested": "tests/test_runtime.py::test_a_failed_assert_says_what_javascript_says_and_aborts; tests/test_runtime.py::test_an_assert_without_names; tests/test_runtime.py::test_the_adapters_functions_are_found_by_dlsym"
  },
  {
@@ -1322,7 +1322,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:998; probe ctypes libc.getuid(): ours 0, Pyodide/Node 0 (Node returns process.getuid(), root here; 0 in a browser)",
+  "evidence": "adapter.c sc_getuid (writes.h); probe ctypes libc.getuid(): ours 0, Pyodide/Node 0 (Node returns process.getuid(), root here; 0 in a browser)",
   "tested": "no"
  },
  {
@@ -1350,7 +1350,7 @@
   "verdict": "full",
   "gaps": [],
   "evidence": "adapter.c getprotobyname_: a fixed table, no host operation (as Pyodide's glue answers from its Protocols object, not from /etc/protocols): \"tcp\" and \"6\" give one struct protoent {tcp, [TCP], 6}, \"udp\" and \"17\" one {udp, [UDP], 17}, built once in a calloc'd block (no data section; the name is compared as integer constants); any other name (upper case, empty, icmp, ip) is NULL. Probe on real Pyodide and ours: 13 names and the numbers 6, 17, 1, line for line the same. getprotobynumber is not an import (libc internal).",
-  "tested": "tests/test_sockets.py::test_getprotobyname_answers_as_pyodide_does, tests/test_sockets.py::test_names_services_protocols_and_reverse_lookups"
+  "tested": "tests/test_sockets.py::test_getprotobyname_answers_as_pyodide_does, tests/test_sockets.py::test_services_protocols_and_numeric_names, tests/test_sockets.py::test_reverse_lookups"
  },
  {
   "name": "getaddrinfo",
@@ -1358,7 +1358,7 @@
   "verdict": "full",
   "gaps": [],
   "evidence": "adapter.c getaddrinfo_ -> _net.py Net._n_getaddrinfo (the checks and the resolver: _sockaddr.py resolve_addrinfo): Pyodide's input checks in its order (EAI_NONAME for no node and no service, EAI_BADFLAGS, EAI_SOCKTYPE, EAI_FAMILY, parseInt of the service, EAI_SERVICE) and defaults (ai_socktype 1, ai_protocol 6 / 17); the answers come from the host's getaddrinfo, ALL addresses (IPv4 and IPv6), ai_canonname with AI_CANONNAME, AI_PASSIVE/NUMERICHOST/NUMERICSERV/ADDRCONFIG by the host, services by name from the host's table (and the same small table that is the guest's /etc/services). The list is one malloc'd block plus the first sockaddr, which is all freeaddrinfo frees (it does not follow ai_next). Differences from Pyodide on purpose: real addresses where its JS invents 172.29.x.x; IPv6 results (Pyodide's CPython has no IPv6, socket.has_ipv6 is False, so Python shows them as (10, raw bytes)); with socktype 0 one STREAM entry, as the JS (not glibc's three).",
-  "tested": "tests/test_sockets.py::test_getaddrinfo_lists_the_hosts_addresses, tests/test_sockets.py::test_names_services_protocols_and_reverse_lookups, tests/test_sockets.py::test_ipv6_structures_are_written_and_read_right"
+  "tested": "tests/test_sockets.py::test_getaddrinfo_lists_the_hosts_addresses, tests/test_sockets.py::test_services_protocols_and_numeric_names, tests/test_sockets.py::test_reverse_lookups, tests/test_sockets.py::test_ipv6_structures_are_written_and_read_right"
  },
  {
   "name": "getnameinfo",
@@ -1366,7 +1366,7 @@
   "verdict": "full",
   "gaps": [],
   "evidence": "adapter.c getnameinfo_ -> _net.py Net._n_getnameinfo (the host's call: _sockaddr.py nameinfo): the host's getnameinfo on the sockaddr_in/in6 (scope id), NI_NUMERICHOST/NUMERICSERV/NAMEREQD/DGRAM by name, EAI_NONAME, EAI_FAMILY for a bad family or length, EAI_OVERFLOW when the buffer is too small. Pyodide: numeric only ('127.0.0.1', '80'); socket.gethostbyaddr('127.0.0.1') works through it in both.",
-  "tested": "tests/test_sockets.py::test_names_services_protocols_and_reverse_lookups, tests/test_sockets.py::test_ipv6_structures_are_written_and_read_right"
+  "tested": "tests/test_sockets.py::test_services_protocols_and_numeric_names, tests/test_sockets.py::test_reverse_lookups, tests/test_sockets.py::test_ipv6_structures_are_written_and_read_right"
  },
  {
   "name": "emscripten_set_up_async_input_device_js",
@@ -1764,7 +1764,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:948-951; probe: ftruncate -1 EINVAL, read-only EINVAL, 3 → 3, 5 GiB → 5368709120: identical in both. A standard stream (0-2) or a directory is EINVAL (it was EBADF), as a tty/pipe on Linux and as Pyodide (one probe file on the real Pyodide and both packagings: identical)",
+  "evidence": "adapter.c sc_ftruncate64 (writes.h); probe: ftruncate -1 EINVAL, read-only EINVAL, 3 → 3, 5 GiB → 5368709120: identical in both. A standard stream (0-2) or a directory is EINVAL (it was EBADF), as a tty/pipe on Linux and as Pyodide (one probe file on the real Pyodide and both packagings: identical)",
   "tested": "tests/test_descriptors.py::test_standard_streams_and_directories_sync_truncate_and_set_nonblocking"
  },
  {
@@ -1772,7 +1772,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:305-311; probe: getcwd '/' both; getcwd(buf,1) → ERANGE both (size==0 gives ERANGE not EINVAL, but musl never passes 0); a symlinked cwd is chdir's gap",
+  "evidence": "adapter.c sc_getcwd (openfiles.h); probe: getcwd '/' both; getcwd(buf,1) → ERANGE both (size==0 gives ERANGE not EINVAL, but musl never passes 0); a symlinked cwd is chdir's gap",
   "tested": "tests/test_basic.py::test_chdir_symlink_and_honest_enosys"
  },
  {
@@ -1790,7 +1790,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:1001; probe ctypes getegid → 0 both",
+  "evidence": "adapter.c sc_getegid (writes.h); probe ctypes getegid → 0 both",
   "tested": "no"
  },
  {
@@ -1798,7 +1798,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:999; probe ctypes geteuid → 0 both",
+  "evidence": "adapter.c sc_geteuid (writes.h); probe ctypes geteuid → 0 both",
   "tested": "no"
  },
  {
@@ -1806,7 +1806,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:1000; probe ctypes getgid → 0 both",
+  "evidence": "adapter.c sc_getgid (writes.h); probe ctypes getgid → 0 both",
   "tested": "no"
  },
  {
@@ -1834,7 +1834,7 @@
   "verdict": "full",
   "gaps": [],
   "evidence": "adapter.c lookup_name: the host resolves the IPv4 address (net.getaddrinfo, first AF_INET result). The libc caller (gethostbyname2_r, wasm func $17452 area) has NO failure path through this import: it stores the returned 4 bytes and reports success. Pyodide's JS never fails either (it makes up 172.29.x.x); ours returns INADDR_NONE (255.255.255.255) for a name the host can not resolve, which nothing connects to. socket.gethostbyname uses getaddrinfo and raises properly.",
-  "tested": "tests/test_sockets.py::test_names_services_protocols_and_reverse_lookups"
+  "tested": "tests/test_sockets.py::test_services_protocols_and_numeric_names, tests/test_sockets.py::test_reverse_lookups"
  },
  {
   "name": "__syscall_mkdirat",
@@ -1869,7 +1869,7 @@
   "gaps": [
    "On a Windows host (a C library with a narrow time_t) an instant outside 0..32535215999 is answered with the zone offset of the nearest instant inside it; not tested there."
   ],
-  "evidence": "adapter.c mktime_js -> loader.mktime -> _host.py _t_mktime (body in _timecalc.py t_mktime): Date(y, m, d, h, mi, s) with V8's limits and the 19xx rule, a time that does not exist or happens twice as ECMAScript's UTC(), the JS tm_isdst logic (dst < 0 guessed, a wrong flag shifts the time by the offsets' difference), -1 beyond the range. Probe: 23 tuples in 5 zones equal Pyodide",
+  "evidence": "adapter.c mktime_js -> loader.mktime -> _host.py _t_mktime (body in _timecalc.py t_mktime): Date(y, m, d, h, mi, s) with V8's limits and the 19xx rule, a time that does not exist or happens twice as ECMAScript's UTC(), the JS tm_isdst logic (dst < 0 guessed, a wrong flag shifts the time by the offsets' difference), -1 beyond the range (also when the shift of a wrong isdst=1 would push the time past it: t_mktime checks the range again after the shift). Probe: 23 tuples in 5 zones equal Pyodide",
   "tested": "tests/test_time.py::test_local_time_in_the_hosts_zone"
  },
  {
@@ -1980,7 +1980,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:938; probe: not-empty ENOTEMPTY, file ENOTDIR match B4b: trailing slashes are stripped (see unlinkat), an empty path is ENOENT.",
+  "evidence": "adapter.c sc_rmdir (writes.h, sc_unlinkat with AT_REMOVEDIR); probe: not-empty ENOTEMPTY, file ENOTDIR match B4b: trailing slashes are stripped (see unlinkat), an empty path is ENOENT; the last component as given decides, as on Linux: 'x/.' is EINVAL, 'x/..' is ENOTEMPTY (the prefix 'x' is looked at first: its own ENOENT/ENOTDIR).",
   "tested": "tests/test_basic.py::test_dup_scandir_fwalk_and_rmtree, tests/test_paths_errno.py::test_rmdir_with_trailing_slashes, tests/test_paths_errno.py::test_the_empty_path_is_enoent_in_every_call"
  },
  {
@@ -2049,7 +2049,7 @@
   "class": "os",
   "verdict": "full",
   "gaps": [],
-  "evidence": "adapter.c:953-962; probe: truncate 2, dir EISDIR, missing ENOENT, -1 EINVAL match truncate of a virtual node: EINVAL for a device, EISDIR for a directory, as Pyodide for /dev/null. B4b: an empty path is ENOENT; a file whose recorded mode has no write bit is EACCES, as open() for writing here and as Pyodide's truncate (Linux lets root truncate it; the adapter follows Pyodide's permission model).",
+  "evidence": "adapter.c sc_truncate64 (writes.h); probe: truncate 2, dir EISDIR, missing ENOENT, -1 EINVAL match truncate of a virtual node: EINVAL for a device, EISDIR for a directory, as Pyodide for /dev/null. B4b: an empty path is ENOENT; a file whose recorded mode has no write bit is EACCES, as open() for writing here and as Pyodide's truncate (Linux lets root truncate it; the adapter follows Pyodide's permission model).",
   "tested": "tests/test_dev.py, tests/test_paths_errno.py::test_the_empty_path_is_enoent_in_every_call, tests/test_paths_errno.py::test_truncate_by_path_needs_a_writable_file"
  },
  {
