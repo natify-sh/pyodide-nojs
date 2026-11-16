@@ -11,7 +11,7 @@ authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
 license = "MIT"
 # The wasm in the wheel is Pyodide's, Binaryen's and ours, each under its own license: see licenses/NOTICE.
 license-files = ["LICENSE", "licenses/*"]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 keywords = ["pyodide", "wasmtime", "webassembly", "wasm", "emscripten", "cpython"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -20,8 +20,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -41,8 +39,8 @@ wasmtime = ["wasmtime>=50.0.1"]
 # optional: a nicer REPL (history, editing, multi-line paste); without it the REPL uses input()
 repl = ["prompt_toolkit>=3.0"]
 # optional: the `pyodide` command that makes a virtual environment for packages that stay (README: Using packages).
-# Only this version pairs with the pinned Pyodide; it needs Python 3.12+ and, to run, Node.js (making the venv only).
-venv = ["pyodide-build==0.39.3; python_version >= '3.12'"]
+# Only this version pairs with the pinned Pyodide; to run it needs Node.js (for making the venv only).
+venv = ["pyodide-build==0.39.3"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

@@ -12,7 +12,7 @@ Pyodide's CPython run by wasmtime-py with no JavaScript: the Emscripten glue is 
 The maintainer communicates in Ukrainian; code, comments, commit messages and docs are in English.
 
 ## Hard rules
-* **No run-time Python dependencies.** wasmtime-py is the `[wasmtime]` extra and a dev dependency; a missing engine says so (`_engine.require_wasmtime`). Python 3.10+. (The owner, 2026-11-10.)
+* **No run-time Python dependencies.** wasmtime-py is the `[wasmtime]` extra and a dev dependency; a missing engine says so (`_engine.require_wasmtime`). Python 3.12+ (the owner, 2026-11-16: it was 3.10+; `pyodide-build`, the optional `venv` extra, needs 3.12). (The owner, 2026-11-10 for the rest.)
 * **The run time needs wasmtime-py and the wasm files of the package** (`pyodide.asm.wasm`, `wasm-opt.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`, `pyodide-lock.json`, and the folders `data/tls` and `data/py`), **no Node and no native Binaryen**. Node and npm's Binaryen
   (`wasm-opt`, `wasm-merge`) exist only in the build (`tools/*.sh`) and in CI. (The owner, 2026-11-10.)
 * **One toolchain: wasi-sdk 34's clang** builds every wasm we build (`adapter.wasm`, `wasm-opt.wasm`); no `clang` from the system. **One exception (the owner, 2026-11-16): the guest's `_ssl`** (with its OpenSSL 3.5.9, the version CPython's own CI builds against) is built the official way, as Pyodide builds its packages: `pyodide-build` and Emscripten 6.0.5, with the CFLAGS of the pinned Pyodide's xbuildenv, in the build and in CI only (a build tool, like Node); the result is a file in `data/`, never committed. (The owner, 2026-11-10 for the rule.)

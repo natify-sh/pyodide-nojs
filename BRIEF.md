@@ -57,7 +57,7 @@ Pyodide's CPython suite: now (CI, 2026-11-16, fused and dynamic alike) 823 resul
 
 ## Hard rules (short form; the full list is in CLAUDE.md)
 
-* The package has **no run-time Python dependency**; wasmtime-py is the `[wasmtime]` extra (and a dev dependency). Python 3.10+.
+* The package has **no run-time Python dependency**; wasmtime-py is the `[wasmtime]` extra (and a dev dependency). Python 3.12+.
 * **Node is a build tool only**; one toolchain, **wasi-sdk 34's clang**, builds every wasm we build, except the guest's `_ssl` (pyodide-build, Emscripten 6.0.5: `tools/build_ssl.sh`).
 * **Both packagings** (fused, dynamic) are tested everywhere a test runs, **including Pyodide's official suite**.
 * **The guest is isolated** from the host's environment, files and (by default) network (D13), with two named exceptions: `--inherit-env` hands over ALL the host's variables, secrets included (and then no snapshot is written), and the CA bundle for TLS is read from the host (`SSL_CERT_FILE`, Python's, the system's: a file with a private key in it would put the key into the guest's `/etc/ssl/cert.pem`; the CA bundle is still open under D13).

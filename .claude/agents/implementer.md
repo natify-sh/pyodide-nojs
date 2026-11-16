@@ -12,7 +12,7 @@ Before you start: read `BRIEF.md` and the files the brief lists under "Read firs
 Rules:
 - Stay inside the brief's Scope. Do not change anything listed as Out of scope.
 - Make the smallest change that makes the Acceptance commands pass. No code for later, no new module, class, layer or option the brief does not ask for, no abstraction before its second use, no reformatting of code you did not need to touch.
-- The package has no run-time Python dependency (wasmtime-py is the `[wasmtime]` extra) and runs on Python 3.10+. State lives in the `Pyodide` object, never in module globals.
+- The package has no run-time Python dependency (wasmtime-py is the `[wasmtime]` extra) and runs on Python 3.12+. State lives in the `Pyodide` object, never in module globals.
 - The run time has no Node and no native Binaryen: those are build tools (`tools/*.sh`, CI). Every wasm we build is built with wasi-sdk 34's clang.
 - `wasm/adapter.c` keeps Wasmtime's adapter rules: no data section (`-fno-jump-tables`), no stack of its own; `tests/test_shape.py` checks them.
 - A change is tested on BOTH packagings (`fused` and `dynamic`), and the official suite runs on both; do not make a feature that works on one only.

@@ -31,7 +31,7 @@ It is **not a fork of Pyodide**: Pyodide is not rebuilt, its artifacts are used 
 | | |
 |---|---|
 | Pyodide | **315.0.0-alpha.2** (`pyodide_nojs.PYODIDE_VERSION`), Python 3.15.0rc1, Emscripten 6.0.5, wheel ABI `pyemscripten_2026_5_wasm32` (`PYODIDE_ABI`); pinned in `package.json` |
-| Host | Python 3.10+, CPython (PyPy untested); wasmtime-py 50.0.1+ (the `[wasmtime]` extra); no other run-time dependency |
+| Host | Python 3.12+, CPython (PyPy untested); wasmtime-py 50.0.1+ (the `[wasmtime]` extra); no other run-time dependency |
 | Needs at run time | the wasm files **in the wheel** (`src/pyodide_nojs/data/`): `pyodide.asm.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`, `wasm-opt.wasm`, `pyodide-lock.json`, and the folders `tls/` (the real `_ssl`, `ssl.py`) and `py/` (`micropip`, `packaging`); without them the package raises `FileNotFoundError` that names the build command. No Node, no native Binaryen |
 
 ## Quick start
@@ -87,7 +87,7 @@ np.int32(10)
 `pyodide venv` (from `pyodide-build`) makes a virtual environment for exactly this Pyodide and a `pip` that installs wheels for it, including Pyodide's own `numpy`. It needs Node.js and a host Python 3.15, only for making the venv and installing; running the packages needs neither.
 ```sh
 pip install pyodide-build==0.39.3        # this version pairs with the pinned Pyodide; do not use another
-                                         # (or: pip install 'pyodide-nojs[venv]', which asks for exactly that version; Python 3.12+)
+                                         # (or: pip install 'pyodide-nojs[venv]', which asks for exactly that version)
 pyodide venv .venv-pyodide               # fetches the matching cross-build environment itself: a venv for Python 3.15
 .venv-pyodide/bin/pip install numpy requests          # the venv's own pip (Windows: .venv-pyodide\Scripts\pip)
 pyodide-nojs --venv .venv-pyodide --inherit-network --allow-top-level-await
@@ -271,7 +271,7 @@ Details: the guest has no `AF_UNIX`: `socket.socketpair()` is a TCP pair over th
 `micropip` works with no JavaScript: the package carries `pyodide-lock.json` (31 packages: 27 of type `package`, 4 shared libraries), and in the guest `micropip` resolves a name in it first, downloads the wheel from `https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/` (sha256 checked) and unpacks it; a package not in the lock comes from PyPI; one already installed is not fetched again. The lock's `libopenssl` entry is Pyodide's own shared library (OpenSSL 1.1.1w, for `ctypes` users) and has nothing to do with the guest's `_ssl`. `micropip` 0.11.1 and `packaging` 26.1 are the release's wheels unpacked into `data/py` (sha256 checked against the lock), so a `site=` copy wins. scipy installs and runs (`scipy.linalg.det`). Installing needs HTTPS: the guest's own TLS or the host's fetch.
 
 ## What is tested
-Pyodide's **official CPython test list** (`python_tests.yaml` of the release: 819 entries, run with libregrtest through `tests/test_pyodide_suite.py`, one guest process per test module as Pyodide's `test_cpython_core` does) on **both packagings**. From the CI run of 2026-11-16 (jobs `Pyodide suite / fused` and `Pyodide suite / dynamic`, Linux): **607 passed, 186 skipped, 30 xfailed, 0 failed of 823 results** (the list's 819 entries plus a few tests of the harness itself), the same on both packagings; the jobs took 43 and 27 minutes (`-n auto`, one job per packaging, `timeout-minutes: 120`). The repository's own offline tests: **810 collected** (`CI=1 uv run pytest --collect-only -q -m "not network and not suite" tests | tail -1`, which counts each test per packaging where it is parametrized); CI (`tests.yml`) runs them on **Linux, Windows and macOS x Python 3.10 and 3.15**, plus the network tests (PyPI and jsDelivr: the host's fetch, the guest's TLS, `micropip`, numpy's wheel) and the suite. Not included: Pyodide's tests of the JavaScript API and `@run_in_pyodide` (they need a browser or Node).
+Pyodide's **official CPython test list** (`python_tests.yaml` of the release: 819 entries, run with libregrtest through `tests/test_pyodide_suite.py`, one guest process per test module as Pyodide's `test_cpython_core` does) on **both packagings**. From the CI run of 2026-11-16 (jobs `Pyodide suite / fused` and `Pyodide suite / dynamic`, Linux): **607 passed, 186 skipped, 30 xfailed, 0 failed of 823 results** (the list's 819 entries plus a few tests of the harness itself), the same on both packagings; the jobs took 43 and 27 minutes (`-n auto`, one job per packaging, `timeout-minutes: 120`). The repository's own offline tests: **810 collected** (`CI=1 uv run pytest --collect-only -q -m "not network and not suite" tests | tail -1`, which counts each test per packaging where it is parametrized); CI (`tests.yml`) runs them on **Linux, Windows and macOS x Python 3.12 and 3.15**, plus the network tests (PyPI and jsDelivr: the host's fetch, the guest's TLS, `micropip`, numpy's wheel) and the suite. Not included: Pyodide's tests of the JavaScript API and `@run_in_pyodide` (they need a browser or Node).
 
 Why tests are skipped or xfail. In Pyodide's own list: 31 `xfail` entries (a whole module not run: `dbm` 7, `platform-specific` 3, "didn't correctly embed test data" 2, "nonsense" 2, `zoneinfo._zoneinfo` 2, slow/timeouts 2, and one each of other reasons) and `skip` globs in 56 modules (110 globs); one xfail module is replaced by our per-test record, which gives 30 xfailed. Many tests also skip themselves on Emscripten. Our own record, `tests/suite_overrides.yaml`, has 28 skip globs in 7 modules, each with its reason (count made by parsing the file):
 
@@ -300,7 +300,7 @@ What does not work, and what is deliberately different (the per-import list with
 * **A C++ exception or a `longjmp` cannot cross a ctypes call or a callback** (the guest traps).
 * **No threads**: the guest has none, as in Pyodide; the library starts none. A host function must not wait for another thread.
 * **Start state** is Pyodide's own (`main()` through `__main_argc_argv`, `sys.executable`, `sys.path` with `''` first, `PYTHONINSPECT=1` mirrored) except where this README says otherwise.
-* **Platforms**: Linux, Windows and macOS are CI-tested on Python 3.10 and 3.15; PyPy is untested; a host that cannot reserve 4 GiB of address space refuses `interrupt()`'s raw write.
+* **Platforms**: Linux, Windows and macOS are CI-tested on Python 3.12 and 3.15; PyPy is untested; a host that cannot reserve 4 GiB of address space refuses `interrupt()`'s raw write.
 
 ## Build, run and test it yourself
 The wasm is built, not committed (`src/pyodide_nojs/data/` is ignored; CI builds it). One toolchain builds our own wasm: **wasi-sdk 34's clang** (`adapter.wasm`, `wasm-opt.wasm`); the exception is the guest's `_ssl` (above). Node and npm's Binaryen (`wasm-opt`, `wasm-merge`, binaryen.js) are build tools only.
