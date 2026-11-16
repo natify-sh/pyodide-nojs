@@ -17,5 +17,10 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
   BSD-2-Clause for cloudlibc), libc++, libc++abi and libunwind of wasi-sdk (Apache-2.0 with LLVM exceptions, and the dual
   MIT / University of Illinois license): the texts are in wasi-sdk-runtime-LICENSES.txt.
   Source: https://github.com/WebAssembly/binaryen (tag version_132), https://github.com/WebAssembly/wasi-sdk (tag wasi-sdk-34)
+* data/tls/_ssl.cpython-315-wasm32-emscripten.so and ssl.py (the guest's TLS, built by tools/build_ssl.sh with pyodide-build and Emscripten 6.0.5): CPython 3.15.0rc1's
+  Modules/_ssl.c linked statically with OpenSSL 3.5.9 (Apache-2.0: OpenSSL-LICENSE-Apache-2.0.txt), built with the recipe of
+  pyodide-recipes packages/libopenssl (MPL-2.0; its patch 0002 makes Emscripten sockets use send/recv). _ssl.c and CPython's own ssl.py are
+  under the PSF license (CPython-LICENSE-PSF.txt). Source: https://github.com/openssl/openssl (tag openssl-3.5.9),
+  https://github.com/pyodide/pyodide-recipes, https://www.python.org/ftp/python/3.15.0/Python-3.15.0rc1.tgz
 * adapter.wasm: built from wasm/adapter.c in this repository (MIT, see LICENSE) with wasi-sdk 34 (-nostdlib: no library is linked in).
 * The Python files of the wheel (pyodide_nojs/ and pyodide_nojs/guest/, which is copied into the guest) are this repository's (MIT).

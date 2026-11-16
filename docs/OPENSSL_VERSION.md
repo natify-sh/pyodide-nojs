@@ -1,9 +1,9 @@
 # The OpenSSL of the guest's TLS: where it stands and whether we can go higher
 
-> **Status: a research report, as of 2026-11-11; not a description of what ships.** What the repository does today (checked 2026-11-16):
-> `tools/build_ssl.sh` builds CPython 3.15.0rc1's `_ssl` against the lock's shared `libopenssl` 1.1.1w, for the test environment only
-> (`tools/prepare_testenv.sh` puts it into `testenv/site_tls`); the wheel carries no `_ssl` and no OpenSSL, and `licenses/NOTICE` lists none.
-> Route (c) below (a static OpenSSL 3.5.9 in `_ssl.so`) is a prototype that was built and run for this report and is **not** in the repository.
+> **Status: a research report, as of 2026-11-11; the decision is in BACKLOG.md D15 (2026-11-16).** What the repository builds now:
+> `tools/build_ssl.sh` builds CPython 3.15.0rc1's `_ssl` with a static OpenSSL 3.5.9 the official way (pyodide-build, Emscripten 6.0.5, new
+> wasm exceptions, the xbuildenv's CFLAGS) into `data/tls/` (`_ssl.cpython-315-wasm32-emscripten.so` and CPython's `ssl.py`); the wheel carries it
+> and `licenses/NOTICE` lists it. The route (c) prototype below (wasi-sdk's clang, `wasm/ssl_prelude.h`, a hand-made sysroot) is replaced by it.
 > **Two findings of the report are out of date**: the host's `/dev` is not mounted any more (`--dev`, `preopen_dev` are gone: the adapter
 > serves a virtual `/dev`, whose `urandom` reads the libc's `getentropy`, `wasm/adapter/dev.h`), and 1.1.1w now seeds without it (checked:
 > `ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)` is created on the fused build with no `--dev`); so the "needs the host's `/dev`" entries and the

@@ -45,6 +45,9 @@ jobs:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
         run: uv build --wheel --out-dir dist
 
+      - name: The wheel carries the guest's TLS
+        run: python3 -m zipfile -l dist/*.whl | grep -E 'data/tls/(_ssl\.cpython-315-wasm32-emscripten\.so|ssl\.py)' | wc -l | grep -qx 2
+
       - name: Smoke-test the wheel in a clean environment, both builds
         run: |
           uv venv -q /tmp/smoke

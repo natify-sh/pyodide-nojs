@@ -4,6 +4,8 @@ name: Build wasm
 #   wasm-opt   Binaryen 132 as wasm32-wasip1 with wasi-sdk 34 (about 12 min; cached by the hash of its script, the wasi-sdk lines of fetch.sh and the npm Binaryen version)
 #   data       pyodide.asm.wasm (exnref), python_stdlib.zip, adapter.wasm (wasi-sdk's clang), pyodide_fused.wasm, wasm-opt.wasm,
 #              pyodide-lock.json
+#   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten 6.0.5: tools/build_ssl.sh) -> data/tls; the static
+#              OpenSSL libraries are cached by the hash of the script (every pin is in it)
 #   testenv    numpy, micropip, openssl, the real _ssl, the `test` wheel and python_tests.yaml (tools/prepare_testenv.sh)
 # Node is a build tool here (Binaryen's wasm-opt and wasm-merge from npm); the package needs none at run time.
 
@@ -55,9 +57,34 @@ jobs:
           path: wasm-opt.wasm
           retention-days: 14
 
+  ssl:
+    name: _ssl (OpenSSL 3.5.9)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+
+      # libssl.a and libcrypto.a (about 3 min): what changes them is in the script (pyodide-build, Emscripten, OpenSSL and the recipe pins)
+      - name: Restore the OpenSSL libraries
+        uses: actions/cache@v6
+        with:
+          path: ssl-work/rc/.libs
+          key: ssl-libs-${{ hashFiles('tools/build_ssl.sh') }}
+
+      - name: Build _ssl and ssl.py
+        run: sh tools/build_ssl.sh ssl-work "$PWD/tls"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tls
+          path: tls
+          retention-days: 14
+
   data:
     name: data + testenv
-    needs: wasm-opt
+    needs: [wasm-opt, ssl]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -75,6 +102,11 @@ jobs:
         with:
           name: wasm-opt
           path: wasm-opt
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tls
+          path: src/pyodide_nojs/data/tls
 
       - name: Build the package's wasm
         run: |

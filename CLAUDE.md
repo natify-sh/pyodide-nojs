@@ -18,7 +18,8 @@ The maintainer communicates in Ukrainian; code, comments, commit messages and do
 * **One toolchain: wasi-sdk 34's clang** builds every wasm we build (`adapter.wasm`, `wasm-opt.wasm`); no `clang` from the system. **One exception (the owner, 2026-11-16): the guest's `_ssl`** (with its OpenSSL 3.5.9, the version CPython's own CI builds against) is built the official way, as Pyodide builds its packages: `pyodide-build` and Emscripten 6.0.5, with the CFLAGS of the pinned Pyodide's xbuildenv, in the build and in CI only (a build tool, like Node); the result is a file in `data/`, never committed. (The owner, 2026-11-10 for the rule.)
 * **Both packagings are tested** wherever a test runs, and **Pyodide's official test suite** (`tests/test_pyodide_suite.py`, `python_tests.yaml`, libregrtest) runs on both, locally and in CI. A feature that works on one only is not done. (The owner, 2026-11-10.)
 * **The supported Pyodide is pinned in `package.json`** (Dependabot tracks it); the adapter answers that build's `env` imports. A bump needs the new release sha in `tools/fetch.sh`, `PYODIDE_VERSION`/`PYODIDE_ABI` in `src/pyodide_nojs/__init__.py`, `LOCK_BASE` (the jsDelivr URL of the lock and wheels) in
-  `src/pyodide_nojs/guest/pyodide_nojs_start.py`, `PYVER` if Python changes, and a green CI on both packagings.
+  `src/pyodide_nojs/guest/pyodide_nojs_start.py`, `PYVER` if Python changes, and a green CI on both packagings. `tools/build_ssl.sh` pins the same release by hand (it goes with the Pyodide pin): `PYODIDE_BUILD` (the pyodide-build that pairs with it), `XBUILDENV`, `EMSCRIPTEN`,
+  and with `PYVER` the CPython tarball and its sha256 (`CPYTHON_VER`, `CPYTHON_SHA256`: `_ssl.c` and `ssl.py` come from it); the OpenSSL version and the pyodide-recipes commit with the sha256 of its recipe files change only on purpose.
 * **State lives in the `Pyodide` object, never in module globals**: two interpreters in one process must work (`test_two_interpreters_in_one_process`).
 * **What cannot work is reported, not faked**: an import the adapter does not answer is a stub that returns 0/null (the JavaScript bridge: documented in BRIEF.md); a missing build or engine is an error that says what to run.
 * **The wheel carries built wasm that is not committed** (`src/pyodide_nojs/data/` is ignored; CI builds it). The bundled binaries keep their licenses (`licenses/NOTICE`): a new one gets its text and a line there.
@@ -98,6 +99,7 @@ uv sync                                                    # dev environment (ad
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
 sh tools/build_data.sh pyo-build                                # the wasm of the package -> src/pyodide_nojs/data (needs node, npm; cmake + ninja for wasm-opt.wasm)
+sh tools/build_ssl.sh pyo-build                                 # the guest's real _ssl + ssl.py (OpenSSL 3.5.9; pyodide-build, Emscripten 6.0.5; needs uv, network, 4 GB) -> src/pyodide_nojs/data/tls
 sh tools/prepare_testenv.sh pyo-build                           # numpy, micropip, openssl, the real _ssl, the `test` wheel -> pyo-build/testenv
 uv run pytest -m "not network and not suite"               # offline, both packagings
 uv run pytest -m network                                   # PyPI and jsDelivr
