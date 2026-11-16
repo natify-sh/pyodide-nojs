@@ -318,7 +318,8 @@ def test_a_writer_never_outlives_the_memory(flavor: str) -> None:
     t = threading.Thread(target=hammer)
     t.start()
     try:
-        for _ in range(25):  # a round starts an interpreter: 100 of them outlived the 90 s bound on a slow runner
+        # a round starts an interpreter: 100 outlived the 90 s bound on a slow runner, and so did 25 (Windows, 3.10)
+        for _ in range(10):
             assert py.run("import signal\nsignal.signal(signal.SIGUSR1, lambda s, f: None)") == 0
             py.close()
     finally:
