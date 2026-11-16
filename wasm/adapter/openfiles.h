@@ -356,6 +356,8 @@ static i32 stat_path(i32 dirfd, const char *path, void *buf, i32 follow) {
 
 EXPORT("__syscall_getcwd") i32 sc_getcwd(char *buf, i32 size) {
     Cwd *C = cwdst();
+    u64 fs[8];
+    if (fx_lookup(AT_FDCWD, C->cwd, 1, fs) == FE_NOENT) return -FE_NOENT;  // the directory was removed (Linux)
     i32 n = slen(C->cwd);
     if (n + 1 > size) return -ERANGE;
     for (i32 k = 0; k <= n; k++) buf[k] = C->cwd[k];
@@ -555,7 +557,8 @@ static i32 open_at(i32 dirfd, const char *path, i32 flags, u32 mode, i32 nocheck
             Meta *r = meta_find(fs[0], fs[1]);
             i32 need = acc == 0 ? 4 : acc == 1 ? 2 : 6;
             if (flags & 01000) need |= 2;
-            if (r && (((need & 4) && !(r->mode & 0444)) || ((need & 2) && !(r->mode & 0222)))) return -FE_ACCES;
+            // (a directory opened for writing is EISDIR whatever its mode, as in Pyodide and Linux: the open says so)
+            if (r && !(((u8 *)fs)[16] == 3 && (acc || (flags & (01000 | 0100)))) && (((need & 4) && !(r->mode & 0444)) || ((need & 2) && !(r->mode & 0222)))) return -FE_ACCES;
         }
     }
     if (created) {
@@ -574,6 +577,7 @@ static i32 open_at(i32 dirfd, const char *path, i32 flags, u32 mode, i32 nocheck
             u64 fs[8] = {0};
             if (!w_path_filestat_get(fd, (flags & 0400000) ? 0 : 1, p, n, fs) && ((u8 *)fs)[16] == 3) return -FE_ISDIR;
         }
+        if (e == FE_ISDIR && (flags & 0300) == 0300) e = FE_EXIST;  // O_CREAT|O_EXCL on "d/": EEXIST as Pyodide (Linux: EISDIR)
         return -e;
     }
     if (created) {
@@ -742,6 +746,32 @@ static i32 snap_load(i32 fd, Snap *s) {
     return 0;
 }
 
+// The guest's root is a host folder: its listing gets the names of the virtual /dev and /proc, as Pyodide's root has them
+// (a host folder of that name is listed once: the virtual node wins, as it does for the paths)
+static i32 snap_root(const Obj *o, Snap *s) {
+    if (o->kind != K_FILE || !o->path || o->path[0] != '/') return 0;
+    for (u32 i = 0, j; o->path[i]; i = o->path[j] ? j + 1 : j) {  // the root as written: only "", "." and ".." between the slashes
+        for (j = i; o->path[j] && o->path[j] != '/';) j++;
+        if (j - i > 2 || (j - i && o->path[i] != '.') || (j - i == 2 && o->path[i + 1] != '.')) return 0;
+    }
+    u8 *nb = (u8 *)malloc(s->len + 64);
+    if (!nb) return ENOMEM;
+    for (u32 i = 0; i < s->len; i++) nb[i] = s->buf[i];
+    u32 at = s->len;
+    for (i32 c = VN_DEV; c <= VN_PROC; c++) {
+        char nm[8];
+        i32 l = knm(nm, vn_name(c)), have = 0;
+        for (u32 p = 0; p + 24 <= s->len; p += 24 + *(u32 *)(s->buf + p + 16)) {
+            u32 nl = *(u32 *)(s->buf + p + 16);
+            have |= nl == (u32)l && s->buf[p + 24] == (u8)nm[0] && s->buf[p + 24 + (u32)l - 1] == (u8)nm[l - 1];
+        }
+        if (!have) at = dent(nb, at, vn_ino(c, 0), 3, nm, l);
+    }
+    if (s->buf) free(s->buf);
+    s->buf = nb, s->len = at;
+    return 0;
+}
+
 // WASI dirents {d_next u64, d_ino u64, d_namlen u32, d_type u8, name} -> linux_dirent64
 // {d_ino u64, d_off i64, d_reclen u16, d_type u8, name\0, padded to 8}. The position is the index of the next entry times
 // DIR_STEP and d_off the one after the entry (the glue's numbers: what lseek(fd, 0, SEEK_CUR) says on a directory).
@@ -753,6 +783,7 @@ EXPORT("__syscall_getdents64") i32 sc_getdents64(i32 fd, u8 *dirp, i32 count) {
     if (!s) return -ENOMEM;
     if (!s->loaded) {
         i32 e = o->kind == K_DEV ? dev_snap(o, s) : snap_load(o->w, s);
+        if (!e && o->kind == K_FILE) e = snap_root(o, s);
         if (e) return -e;
     }
     u64 idx = s->off / DIR_STEP;
@@ -810,7 +841,7 @@ EXPORT("__syscall_fcntl64") i32 sc_fcntl64(i32 fd, i32 cmd, i32 va) {
         case 3: {  // F_GETFL
             if (is_sock(fd)) return 2 | (sock_nb(fd) ? 04000 : 0);  // O_RDWR, O_NONBLOCK
             if (is_pipe(fd)) return (vobj(fd)->kind == K_PIPEW) | vobj(fd)->fl;  // O_WRONLY / O_RDONLY, and what F_SETFL set
-            if (vobj(fd)->kind == K_DEV) return (vobj(fd)->oflags & 03) | (vobj(fd)->fl & 02000) | (vobj(fd)->nb ? 04000 : 0);  // as opened, and F_SETFL's O_APPEND and O_NONBLOCK
+            if (vobj(fd)->kind == K_DEV) return (vobj(fd)->oflags & 03) | (vobj(fd)->fl & 02000) | (vobj(fd)->nb ? 04000 : 0) | 0100000;  // as opened, and F_SETFL's O_APPEND and O_NONBLOCK
             u8 st[24] __attribute__((aligned(8)));
             i32 e = w_fd_fdstat_get(rfd(fd), st);
             if (e) return -e;
@@ -820,7 +851,7 @@ EXPORT("__syscall_fcntl64") i32 sc_fcntl64(i32 fd, i32 cmd, i32 va) {
             i32 fl = r && w ? 2 : w ? 1 : 0;  // O_RDWR, O_WRONLY, O_RDONLY
             if (ff & 1) fl |= 02000;          // O_APPEND
             if ((ff & 4) || (vobj(fd) && vobj(fd)->nb)) fl |= 04000;  // O_NONBLOCK (a stream's or directory's is kept by us)
-            return fl;
+            return fd_std(fd) ? fl : fl | 0100000;  // O_LARGEFILE, as Pyodide and Linux report for an opened file (not the standard streams)
         }
         case 4: {  // F_SETFL: append and nonblock only
             if (is_sock(fd)) {

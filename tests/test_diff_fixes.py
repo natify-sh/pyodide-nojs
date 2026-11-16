@@ -93,6 +93,14 @@ def test_stdout_is_line_buffered_on_a_pipe(guest: Guest) -> None:
     assert r.returncode == 134 and r.stdout == "before the trap\n"
 
 
+def test_stdin_is_line_buffered(guest: Guest) -> None:
+    """L7: `sys.stdin` and `sys.__stdin__` have `line_buffering` True in Pyodide (it was False here)."""
+    r = guest.run(
+        "import sys; print(sys.stdin.line_buffering, sys.__stdin__.line_buffering, sys.stdout.line_buffering)"
+    )
+    assert (r.returncode, r.stdout) == (0, "True True True\n")
+
+
 ENV_CODE = """
 import os, sys, pathlib, getpass
 print(sorted(os.environ))

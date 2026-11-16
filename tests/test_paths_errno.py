@@ -159,6 +159,77 @@ for m in ('w', 'a', 'r+'):
     )
 
 
+def test_a_directory_opened_for_writing_is_eisdir_whatever_its_mode(guest: Guest):
+    # (before: the mode bits were looked at first, EACCES); O_CREAT|O_EXCL on "d/" is EEXIST as Pyodide (Linux: EISDIR)
+    run(
+        guest,
+        """
+os.mkdir('dro'); os.chmod('dro', 0o555)
+os.mkdir('dnone'); os.chmod('dnone', 0)
+for n in ('dro', 'dnone'):
+    for fl in (os.O_WRONLY, os.O_RDWR, os.O_RDONLY | os.O_CREAT, os.O_RDONLY | os.O_TRUNC, os.O_WRONLY | os.O_APPEND):
+        assert err(os.open, n, fl) == 'EISDIR', (n, fl)
+for fl in (os.O_WRONLY, os.O_RDWR):
+    assert err(os.open, 'd/', fl | os.O_CREAT | os.O_EXCL) == 'EEXIST', fl
+    assert err(os.open, 'd', fl | os.O_CREAT | os.O_EXCL) == 'EEXIST', fl
+""",
+    )
+
+
+def test_getcwd_of_a_removed_directory_is_enoent(guest: Guest):
+    # Linux; Pyodide refuses to remove the cwd (EBUSY), which this does not copy
+    run(
+        guest,
+        """
+os.mkdir('gone'); os.mkdir('gone/in')
+os.chdir('gone/in')
+assert os.getcwd() == W + '/gone/in'
+os.rmdir(W + '/gone/in')
+assert err(os.getcwd) == 'ENOENT'
+os.chdir(W)
+assert os.getcwd() == W
+""",
+    )
+
+
+def test_f_getfl_of_an_opened_file_has_o_largefile_the_standard_streams_do_not(guest: Guest):
+    run(
+        guest,
+        """
+import fcntl
+LF = 0o100000
+for target in ('f', 'd', '/dev/null'):
+    fd = os.open(target, os.O_RDONLY)
+    assert fcntl.fcntl(fd, fcntl.F_GETFL) == LF, (target, oct(fcntl.fcntl(fd, fcntl.F_GETFL)))
+fd = os.open('f', os.O_RDWR | os.O_APPEND)
+assert fcntl.fcntl(fd, fcntl.F_GETFL) == LF | 0o2002
+assert [fcntl.fcntl(i, fcntl.F_GETFL) for i in (0, 1, 2)] == [0, 1, 1]
+""",
+    )
+
+
+def test_writev_on_a_standard_stream_writes_every_buffer(guest: Guest):
+    p = guest.run("import os\nn = os.writev(1, [b'abc', b'def', b'\\n'])\nos.writev(2, [b'x', b'y'])\nprint(n)")
+    assert p.returncode == 0, p.stderr[-2000:]
+    assert p.stdout.splitlines() == ["abcdef", "7"], p.stdout
+    assert "xy" in p.stderr
+
+
+def test_the_root_lists_dev_and_proc_once(guest: Guest):
+    run(
+        guest,
+        """
+for p in ('/', '/.', '//', '/tmp/..'):
+    names = os.listdir(p)
+    assert names.count('dev') == 1 and names.count('proc') == 1, (p, names)
+    assert sorted(e.name for e in os.scandir(p)).count('dev') == 1, p
+os.chdir('/')
+assert 'dev' in os.listdir('.') and 'proc' in os.listdir('.')
+assert 'dev' not in os.listdir('/tmp') and 'dev' not in os.listdir(W)
+""",
+    )
+
+
 def test_standard_streams_stat_and_times(guest: Guest):
     run(
         guest,

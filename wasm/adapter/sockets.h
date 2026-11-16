@@ -376,7 +376,7 @@ WASI("fd_write") i32 w_fd_write(i32 fd, const void *iovs, i32 n, i32 *nwritten);
 EXPORT("fd_write") i32 x_fd_write(i32 fd, const u32 *iov, i32 n, i32 *nw) {
     if (is_pipe(fd)) return pipe_write(vobj(fd), iov, n, nw);
     if (is_dev(fd)) return dev_write(vobj(fd), iov, n, nw);
-    if (!is_sock(fd)) return n <= 1 || !is_regular(fd) ? w_fd_write(rfd(fd), iov, n, nw) : file_iov(1, rfd(fd), iov, n, 0, nw);
+    if (!is_sock(fd)) return n <= 1 ? w_fd_write(rfd(fd), iov, n, nw) : file_iov(1, rfd(fd), iov, n, 0, nw);  // (a write can not wait for more: every buffer is written, also on a standard stream)
     if (would_block(fd, 0, 4)) return EAGAIN_;
     i32 tot = 0;
     for (i32 k = 0; k < n; k++) {
