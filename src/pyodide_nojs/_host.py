@@ -31,7 +31,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from . import _cif, _engine, _timecalc, _tty, _wasm
+from . import PYODIDE_ABI, _cif, _engine, _timecalc, _tty, _venv, _wasm
 from ._consts import (
     BASE_ENV,
     FLAVORS,
@@ -95,6 +95,8 @@ class Pyodide:
 
     ``site``: a folder (or several) copied into the guest's ``site-packages`` (a wheel unpacked...; it wins over the
     package's own ``micropip``);
+    ``venv``: the root of a virtual environment made by ``pyodide venv``: its site-packages is used like one more
+    ``site`` folder (the explicit ones win); another Python is a ``ValueError``, wheels of another Pyodide a warning;
     The guest's ``ssl`` is always the real one: ``_ssl`` (OpenSSL 3.5.9) and CPython's own ``ssl.py`` from the
     package's ``data/tls`` (``tools/build_ssl.sh``), copied into ``site-packages`` ahead of the stdlib zip's stub;
     ``micropip`` and ``packaging`` are the package's too (``data/py``).
@@ -127,6 +129,7 @@ class Pyodide:
         flavor: str | None = None,
         *,
         site: str | os.PathLike[str] | list[str | os.PathLike[str]] | None = None,
+        venv: str | os.PathLike[str] | None = None,
         mounts: dict[str, str | os.PathLike[str]] | None = None,
         env: dict[str, str] | None = None,
         inherit_env: bool = False,
@@ -172,6 +175,19 @@ class Pyodide:
             )
         self.flavor = flavor
         self.site = [site] if isinstance(site, (str, os.PathLike)) else list(site or [])
+        if venv is not None:  # one more site folder, ahead of the explicit ones (those win)
+            if not os.path.isdir(venv):
+                raise FileNotFoundError(f"venv folder not found: {venv}")
+            _venv.check_python(Path(venv), PYVER)
+            vsite = _venv.site_packages(Path(venv))
+            self.site.insert(0, vsite)
+            if bad := _venv.foreign_wheels(vsite, PYVER, PYODIDE_ABI):
+                names = ", ".join(bad[:5]) + (f" and {len(bad) - 5} more" if len(bad) > 5 else "")
+                print(
+                    f"pyodide-nojs: {venv} holds packages built for another Python or Pyodide, which will not "
+                    f"load here (Python {PYVER}, {PYODIDE_ABI}): {names}; pure-Python packages work",
+                    file=sys.stderr,
+                )
         self.own_dirs = self._own_folders()
         self.mounts = {k: str(v) for k, v in (mounts or {}).items()}
         for guest in self.mounts:

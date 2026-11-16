@@ -10,10 +10,11 @@ import signal
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from . import PYODIDE_ABI, PYODIDE_VERSION, __version__, _engine
-from ._host import FLAVORS, TESTENV_HINT, Pyodide
+from . import PYODIDE_ABI, PYODIDE_VERSION, __version__, _engine, _venv
+from ._host import FLAVORS, PYVER, TESTENV_HINT, Pyodide
 
 GUEST_SIGWINCH = 28  # Linux's number, which the guest's libc has
 CWD_MOUNT = "/host"  # where --mount-cwd puts the host's current folder
@@ -198,6 +199,12 @@ def main(argv: list[str] | None = None) -> int:
         "--site", action="append", default=[], metavar="DIR", help="a folder copied into site-packages (repeatable)"
     )
     ap.add_argument(
+        "--venv",
+        metavar="DIR",
+        help="a virtual environment made by `pyodide venv` for this Pyodide: its site-packages is used, "
+        "checked for Python and ABI",
+    )
+    ap.add_argument(
         "--mount",
         action="append",
         default=[],
@@ -273,6 +280,14 @@ def main(argv: list[str] | None = None) -> int:
         for f in folders:
             if not os.path.isdir(f):
                 ap.error(f"{opt} folder not found: {f}{TESTENV_HINT}")
+    if ns.venv is not None:
+        try:
+            if not os.path.isdir(ns.venv):
+                raise FileNotFoundError(f"venv folder not found: {ns.venv}")
+            _venv.check_python(Path(ns.venv), PYVER)
+            _venv.site_packages(Path(ns.venv))
+        except (OSError, ValueError) as exc:
+            ap.error(f"--venv: {exc}")
     if ns.mount_cwd:
         mounts[CWD_MOUNT] = os.getcwd()
     argv0: list[str] | None = None
@@ -292,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     with Pyodide(
         flavor,
         site=ns.site,
+        venv=ns.venv,
         mounts=mounts,
         env=dict(e.split("=", 1) for e in ns.env),
         inherit_env=ns.inherit_env,

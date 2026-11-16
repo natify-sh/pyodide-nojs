@@ -50,7 +50,7 @@ $ pyodide-nojs --inherit-network --allow-top-level-await
 'OpenSSL 3.5.9 29 Sep 2026'
 >>> import micropip; await micropip.install("numpy")
 ```
-Command line flags (`pyodide-nojs -h` has the text): `-c CODE`, `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--mount GUEST=HOST`, `--mount-cwd` (the host's current folder at `/host`), `--env K=V`, `--inherit-env` (ALL the host's variables, secrets included), the network flags `--inherit-network --tcp --udp --dns --http --pyfetch` (default off), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL), `--asm-wasm FILE`, `--stdlib FILE`, `--data DIR` (other wasm files than the package's), `-v`/`--verbose` (log the loader and the network), `--version`.
+Command line flags (`pyodide-nojs -h` has the text): `-c CODE`, `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--venv DIR` (a virtual environment made by `pyodide venv`, checked for Python and ABI), `--mount GUEST=HOST`, `--mount-cwd` (the host's current folder at `/host`), `--env K=V`, `--inherit-env` (ALL the host's variables, secrets included), the network flags `--inherit-network --tcp --udp --dns --http --pyfetch` (default off), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL), `--asm-wasm FILE`, `--stdlib FILE`, `--data DIR` (other wasm files than the package's), `-v`/`--verbose` (log the loader and the network), `--version`.
 
 ```python
 from pyodide_nojs import Pyodide
@@ -64,15 +64,25 @@ with Pyodide() as py:  # "dynamic" by default; Pyodide("fused") or $PYODIDE_NOJS
 Other Pyodide files can be tried on the dynamic build: `Pyodide("dynamic", asm_wasm="pyodide.asm.wasm", stdlib="python_stdlib.zip")` (either one; the adapter and `wasm-opt.wasm` stay the package's), `--asm-wasm`/`--stdlib`, or `$PYODIDE_NOJS_ASM_WASM`/`$PYODIDE_NOJS_STDLIB`. They imply `dynamic` (`fused` with them is an error: the fused module is built for one Pyodide). A raw `pyodide.asm.wasm` from the npm package (legacy exceptions) is converted once by `wasm-opt.wasm` and cached. At start a warning on stderr says what is not the pinned build's (CPython's version string, an `env` import the adapter does not know (`-v` lists them), a missing `setsockopt` patch, a stdlib zip of another Python). Only the pinned build is tested.
 
 ### Installing packages of your own
-`micropip` installs into the guest's temporary root, so what it installs is gone when the run ends. For packages that stay, use Pyodide's own tooling on the host and point `--site` at the result:
+`micropip` (above) installs into the guest's temporary root, so what it installs is gone when the run ends. For packages that stay there are two ways, both on the host, and neither needs `pyodide-build` to run the packages:
+
+**Plain pip (pip 26 or newer; any host Python; no Node).** Wheels for Pyodide's platform that PyPI hosts (PEP 783, tag `pyemscripten_2026_5_wasm32`) install into a folder, which `--site` then copies into the guest:
 ```sh
-pip install pyodide-build==0.39.3        # the version that pairs with the pinned Pyodide; a host Python 3.15
-pyodide xbuildenv install 315.0.0a2
-pyodide venv .venv-pyodide               # Node.js is needed for this step, not for running the packages
-.venv-pyodide/bin/pip install numpy six
-pyodide-nojs --site .venv-pyodide/lib/python3.15/site-packages -c "import numpy; print(numpy.__version__)"
+pip install --target pkgs --platform pyemscripten_2026_5_wasm32 --python-version 3.15 --implementation cp --abi cp315 \
+    --only-binary=:all: py_ballisticcalc.exts py_ballisticcalc
+pyodide-nojs --site pkgs -c "import py_ballisticcalc_exts, py_ballisticcalc; print(py_ballisticcalc.__version__)"
 ```
-`pyodide venv` makes a virtual environment whose `pip` is patched to install wheels of Pyodide's platform (`pyemscripten_2026_5_wasm32`, `only-binary`), so the wheels are the ones Pyodide itself uses. Checked with `six` 1.17.0, `numpy` 2.4.3 (the wheel comes from PyPI) and `py_ballisticcalc_exts` 3.1.1 (a native wheel), on both packagings, with the venv's folder as `--site`: they import and run. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a venv that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS. `--site` copies the whole folder, including the venv's `pip` (13 MB) and `__pycache__`.
+Checked with pip 26.3 on both packagings (`py_ballisticcalc_exts` 3.1.1, a native wheel, imports). Pyodide's **own** packages (`numpy`, `scipy`, `cffi` ...) are not on PyPI: install them in the guest with `micropip` (from the lock, section below), or with a pip that has Pyodide's package index (what `pyodide venv` sets up).
+
+**`pyodide venv`** (from `pyodide-build`: it needs Node.js and a host Python 3.15, only to make the venv) gives a virtual environment whose `pip` is patched for Pyodide's platform and has Pyodide's own index, so it also installs `numpy`:
+```sh
+pip install pyodide-build==0.39.3        # the version that pairs with the pinned Pyodide
+pyodide xbuildenv install 315.0.0a2
+pyodide venv .venv-pyodide
+.venv-pyodide/bin/pip install numpy six
+pyodide-nojs --venv .venv-pyodide -c "import numpy; print(numpy.__version__)"
+```
+`--venv DIR` (or `Pyodide(venv=...)`) finds the venv's site-packages itself and checks the venv: a venv of another Python (`pyvenv.cfg`) is an error, and a wheel built for another Python or Pyodide (it will not load) is a warning that names it; pure-Python wheels work. `--site DIR` stays for any folder of your own. Checked on both packagings with `six` 1.17.0, `numpy` 2.4.3 (Pyodide's own build, from the xbuildenv's package index: it is not on PyPI) and `py_ballisticcalc_exts` 3.1.1. Not checked: calling the C++ code of `py_ballisticcalc_exts` (only the import), a folder that also holds `micropip` or `packaging` (they would collide with the package's own), Windows and macOS. `--site` copies the whole folder, including a venv's `pip` (13 MB) and `__pycache__`. `uv` cannot make a venv for this Pyodide yet (it knows only the Pyodide of Python 3.14); a venv of 3.14 is refused by `--venv`.
 
 Pyodide's own `python` command (a drop-in for the native one: `-c`, a file, `-m`; Node.js 20+, not sandboxed, from the `pyodide-core` release archive, `pyodide venv`, or `uv python install` of Pyodide's CPython with its package index) is the reference for what a command line should do. `pyodide-nojs` takes `-c` and a file and has no `-m` yet; it needs no Node, and the network and the host's files are closed unless granted.
 
