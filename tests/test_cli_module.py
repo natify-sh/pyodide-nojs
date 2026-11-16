@@ -109,3 +109,11 @@ def test_after_a_double_dash_it_is_pythons_own_command_line(flavor: str, site: P
 def test_wrong_use_after_a_double_dash_is_status_2(flavor: str, args: list[str], message: str) -> None:
     r = cli(flavor, *args)
     assert r.returncode == 2 and r.stderr.strip() == f"pyodide-nojs: error: {message}", r.stderr
+
+
+def test_after_c_code_everything_is_the_programs(flavor: str) -> None:
+    """As in CPython: `-c CODE -m x --flag` leaves `-m x --flag` to the program."""
+    r = cli(flavor, "-c", "import sys; print(sys.argv)", "-m", "x", "--flag")
+    assert r.returncode == 0 and r.stdout == "['-c', '-m', 'x', '--flag']\n", (r.stdout, r.stderr)
+    r = cli(flavor, "--env", "K=V", "-c", "import os, sys; print(os.environ['K'], sys.argv[1:])", "a", "-m")
+    assert r.returncode == 0 and r.stdout == "V ['a', '-m']\n", (r.stdout, r.stderr)

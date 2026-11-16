@@ -263,8 +263,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.usage = "pyodide-nojs [OPTIONS] [--] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]"
     args = sys.argv[1:] if argv is None else argv
     rest: list[str] = []
-    command: list[str] = []  # what follows `--`: Python's own command line
-    if "--" in args and not ap.parse_known_args(args[: args.index("--")])[0].file:  # (not a script's own `--`)
+    command: list[str] = []  # what follows `--` or `-c CODE`: Python's own command line
+    first = min((args.index(t) for t in ("--", "-m") if t in args), default=len(args))
+    if "-c" in args and args.index("-c") + 1 < len(args) and args.index("-c") < first:
+        i = args.index("-c")  # after `-c CODE` everything is the program's, as in CPython: `-c CODE -m x` passes `-m x`
+        before, _ = ap.parse_known_args(args[:i])
+        if before.code is None and not before.file:
+            args, command = args[:i], args[i:]
+    elif "--" in args and not ap.parse_known_args(args[: args.index("--")])[0].file:  # (not a script's own `--`)
         i = args.index("--")
         if ap.parse_known_args(args[:i])[0].code is None:
             args, command = args[:i], args[i + 1 :]
