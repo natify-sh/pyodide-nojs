@@ -192,7 +192,6 @@ class Pyodide:
         self._sig_lock = threading.RLock()
         self._sig_posted = False  # interrupt() ran since this run began
         self._sig_since_run = False  # interrupt() ran since the last run ended (what it left in a run's wrapper)
-        self._runs = 0
         self._exited: int | None = None
         # table slots of freed closures (ffi_closure_free_js), reused last in, first out
         self.free_slots: list[int] = []
@@ -1244,7 +1243,7 @@ class Pyodide:
         files = [
             (str(p.relative_to(self.root)), p.stat().st_size)
             for p in sorted(self.root.rglob("*"))
-            if p.is_file() and not p.name.startswith(("_pw_", "_probe"))
+            if p.is_file() and p.name != "_probe"
         ]
         return state, files
 
@@ -1308,20 +1307,12 @@ class Pyodide:
         None-like code as CPython's: text -> 1, None -> 0)."""
         if not self._started:
             self._start()
-        assert self.root is not None
-        self._runs += 1
         pre = f"import sys; sys.argv = {list(argv)!r}\n" if argv is not None else ""
-        (self.root / f"_pw_{self._runs}.py").write_text(pre + code)
-        rc_file = f"/_pw_{self._runs}.rc"
-        wrapper = f"__import__('pyodide_nojs_run').run({f'/_pw_{self._runs}.py'!r}, {rc_file!r})\n"
-        src = wrapper.encode() + b"\0"
-        store = self.guest.store
-        p = self.guest.ex["PyMem_Malloc"](store, len(src))
-        self._wr(p, src)
+        text = (pre + code).encode()  # strict UTF-8, as the file it used to be written to
         with self._sig_lock:  # (the flags are read and written under the lock interrupt() holds: no update is lost)
             self._sig_posted = False  # only a post that comes during this run can be late for it: older ones persist
         try:
-            rc = self.guest.ex["PyRun_SimpleString"](store, p)
+            rc = self._call_wrapper(text)
         except (
             GuestExit
         ) as e:  # the process ended (exit(), os._exit(), a signal's default action): this interpreter is gone
@@ -1354,19 +1345,39 @@ class Pyodide:
             posted, self._sig_since_run = self._sig_posted or self._sig_since_run, False  # report 1, not 130
         if self._sig_posted and self._exited is None:
             self._drop_late_signal()
-        rc_path = self.root / rc_file.lstrip("/")
         if self._exited is not None:
             self.close()  # a next run() starts a new interpreter
             self._exited = None
-        else:
-            try:
-                rc = int(rc_path.read_text())
-            except (OSError, ValueError):  # no status written: a signal ended the wrapper itself
-                rc = 130 if posted else 1
+        if rc is None:  # an error escaped the wrapper (a signal ended it itself)
+            rc = 130 if posted else 1
         if self.lazy:
             log.info("[loader] imports bound lazily (no definition at load): %s", ", ".join(sorted(set(self.lazy))))
         self.net.flush_log()
         return rc
+
+    def _call_wrapper(self, text: bytes) -> int | None:
+        """``pyodide_nojs_run.run(text)`` through the C API: its status, or None if an error escaped it (cleared)."""
+        ex, store = self.guest.ex, self.guest.store
+        n = len(text)
+        blob = text + b"\0pyodide_nojs_run\0run\0"  # the code, then the two C strings the lookup needs
+        buf = ex["PyMem_Malloc"](store, len(blob))
+        self._wr(buf, blob)
+        refs = [ex["PyUnicode_DecodeUTF8"](store, buf, n, 0)]  # strict, as the file was read
+        mod = ex["PyImport_ImportModule"](store, buf + n + 1)
+        try:  # (buf is freed once the lookup is done)
+            fn = ex["PyObject_GetAttrString"](store, mod, buf + n + 18) if mod else 0
+            refs += [mod, fn]
+            ex["PyMem_Free"](store, buf)
+            res = ex["PyObject_CallOneArg"](store, fn, refs[0]) if fn and refs[0] else 0
+            if not res:
+                ex["PyErr_Clear"](store)
+                return None
+            refs.append(res)
+            return ex["PyLong_AsLong"](store, res)
+        finally:
+            for r in refs:
+                if r:
+                    ex["Py_DecRef"](store, r)
 
     def _drop_late_signal(self) -> None:
         """A signal that came after the last look of this run must not hit the next, unrelated one. Only the cell is

@@ -65,7 +65,7 @@ def test_restore_does_not_boot_python(flavor, cache, monkeypatch):
     with Pyodide(flavor, preload=PRE) as py:  # the control: a normal start is seen by the spy
         py.run("pass")
         assert not py.restored
-    assert "__main_argc_argv" in names and "PyRun_SimpleString" in names
+    assert "__main_argc_argv" in names and "PyObject_CallOneArg" in names
     names.clear()
     with Pyodide(flavor, preload=PRE) as py:
         assert py.run("print(f(0))") == 0

@@ -132,3 +132,20 @@ def test_an_assert_with_a_pointer_beyond_the_memory_prints_what_it_can(guest: Gu
     )
     assert r.returncode == 134
     assert "Aborted(Assertion failed: , at: f,1,)\n" in r.stderr
+
+
+def test_the_run_leaves_no_file_in_the_guests_root(flavor: str, capfd) -> None:
+    """N38: `run()` hands the code over and gets the status through the C API, not through `_pw_N.py`/`.rc`."""
+    from pyodide_nojs import Pyodide
+
+    with Pyodide(flavor) as py:
+        assert py.run("pass") == 0
+        assert py.run("raise ValueError(1)") == 1
+        assert py.run("import sys; sys.exit(2)") == 2
+        assert py.run("import os; print(sorted(os.listdir('/')))") == 0
+        assert py.run("open('/_pw_1.py')") == 1
+        assert py.run("a = 1\nb = 2\nraise KeyError(3)\n", argv=["x"]) == 1
+        out, err = capfd.readouterr()
+        assert "_pw_" not in out
+        assert "FileNotFoundError" in err
+        assert 'File "<string>", line 4, in <module>' in err  # argv's line shifts it by one, as before

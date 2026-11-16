@@ -74,20 +74,20 @@ def _finish(err):
     return rc
 
 
-def run(src_path, rc_path):
+def run(code_text):
     """One `run()` of the host: the user's code in __main__, SystemExit as an exit status (the interpreter must
     survive it: Emscripten's exit() ends in `unreachable`), an uncaught KeyboardInterrupt as a traceback and status 130
     (a shell's 128 + SIGINT), any other error as a traceback and status 1.
 
     The host's Ctrl-C (`Pyodide.interrupt`) can come at any look for signals, also in this wrapper: once the user's code
     is over, SIGINT is given to a handler that does nothing until the status is written, so that a late signal can not
-    cut the traceback, the flush or the status file (the host drops a signal that came late for the run anyway)."""
+    cut the traceback, the flush or the status (the host drops a signal that came late for the run anyway). The status
+    is the return value."""
     err = None
     try:
         import __main__
 
-        with open(src_path) as f:
-            code = compile(f.read(), "<string>", "exec")
+        code = compile(code_text, "<string>", "exec")
         exec(code, __main__.__dict__)
     except BaseException as e:
         err = e
@@ -102,7 +102,6 @@ def run(src_path, rc_path):
             if err is None:
                 err = KeyboardInterrupt()
     rc = _finish(err)
-    with open(rc_path, "w") as f:  # one write of the whole text
-        f.write(str(rc))
     # the user's handler is back (a program that had none has Python's own)
     signal.signal(signal.SIGINT, signal.default_int_handler if saved is None else saved)
+    return rc

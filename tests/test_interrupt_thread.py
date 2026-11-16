@@ -155,18 +155,18 @@ def test_a_late_signal_is_not_carried_to_the_next_run(flavor: str) -> None:
     """A signal that comes after the last look of a run is dropped at its end (it was meant for that run)."""
     with Pyodide(flavor) as py:
         assert py.run("pass") == 0
-        real = py.guest.ex["PyRun_SimpleString"]
+        real = py.guest.ex["PyObject_CallOneArg"]
 
-        def late(store: object, p: int) -> int:
-            r = real(store, p)
+        def late(store: object, fn: int, arg: int) -> int:
+            r = real(store, fn, arg)
             py.interrupt()  # the run is over: nothing looks again before its end
             return r
 
         # No public way posts "after the last look of a run" on purpose, so the run's own entry point is wrapped
-        # (LazyExports keeps the wrapped functions in `_got`): the post comes when PyRun_SimpleString has returned.
-        py.guest.ex._got["PyRun_SimpleString"] = late  # type: ignore[attr-defined]
+        # (LazyExports keeps the wrapped functions in `_got`): the post comes when PyObject_CallOneArg has returned.
+        py.guest.ex._got["PyObject_CallOneArg"] = late  # type: ignore[attr-defined]
         assert py.run("pass") == 0
-        py.guest.ex._got["PyRun_SimpleString"] = real  # type: ignore[attr-defined]
+        py.guest.ex._got["PyObject_CallOneArg"] = real  # type: ignore[attr-defined]
         assert py.run("for _ in range(10**6): pass") == 0
 
 
