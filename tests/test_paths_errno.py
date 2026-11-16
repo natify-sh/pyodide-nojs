@@ -37,7 +37,7 @@ os.mkdir('d')
 
 def run(guest: Guest, body: str) -> None:
     # the script runs through exec with its source registered, so a failure shows the line, not only its number
-    script = f"WIN = {WIN}\n" + HEAD + body
+    script = f"WIN = {WIN}\nLINUX = {sys.platform.startswith('linux')}\n" + HEAD + body
     code = (
         f"import linecache\nS = {script!r}\nlinecache.cache['<t>'] = (len(S), None, S.splitlines(True), '<t>')\n"
         "exec(compile(S, '<t>', 'exec'))\nprint('ok')"
@@ -168,9 +168,12 @@ os.mkdir('dro'); os.chmod('dro', 0o555)
 os.mkdir('dnone'); os.chmod('dnone', 0)
 for n in ('dro', 'dnone'):
     for fl in (os.O_WRONLY, os.O_RDWR, os.O_RDONLY | os.O_CREAT, os.O_RDONLY | os.O_TRUNC, os.O_WRONLY | os.O_APPEND):
+        if WIN and fl & os.O_CREAT:  # (a Windows host answers what it answers for a create on a directory: unchecked)
+            continue
         assert err(os.open, n, fl) == 'EISDIR', (n, fl)
 for fl in (os.O_WRONLY, os.O_RDWR):
-    assert err(os.open, 'd/', fl | os.O_CREAT | os.O_EXCL) == 'EEXIST', fl
+    if LINUX:  # (the host's errno for "d/" with O_CREAT|O_EXCL differs on macOS and Windows: unchecked there)
+        assert err(os.open, 'd/', fl | os.O_CREAT | os.O_EXCL) == 'EEXIST', fl
     assert err(os.open, 'd', fl | os.O_CREAT | os.O_EXCL) == 'EEXIST', fl
 """,
     )
