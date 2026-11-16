@@ -71,9 +71,9 @@ print("mlkem", [g for g in ssl.create_default_context().get_groups() if "MLKEM" 
 
 
 def test_loopback_handshake_and_hostname_check(guest: Guest, cert: tuple[Path, Path]):
-    mount = ("--mount", f"{cert[0].parent}={cert[0].parent}")
+    mount = ("--mount", f"/certs={cert[0].parent}")
     for name, good in (("localhost", True), ("wrong.example", False)):
-        p = guest.run(f"CERT, KEY, NAME = {str(cert[0])!r}, {str(cert[1])!r}, {name!r}\n" + LOOPBACK, None, *mount)
+        p = guest.run(f"CERT, KEY, NAME = '/certs/c.pem', '/certs/k.pem', {name!r}\n" + LOOPBACK, None, *mount)
         if good:
             assert p.returncode == 0, p.stderr[-2000:]
             assert "loopback TLSv1.3 [1, 1]" in p.stdout and "server got b'ping'" in p.stdout
