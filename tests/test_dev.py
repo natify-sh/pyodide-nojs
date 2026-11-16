@@ -468,3 +468,12 @@ os.write(2, repr(res).encode())
         None,
     )
     assert r.stderr.endswith("['EBADF', 'EBADF', 8, 11]") and "via-tty\n" in r.stdout and "via-stdout\n" in r.stdout, r
+
+
+def test_a_mount_at_a_long_guest_path_is_seen(guest: Guest, tmp_path: Path):
+    """The preopens' names were kept in 64-byte slots and a longer one was dropped silently (a mount at a long path,
+    such as a temporary folder on macOS, was not found)."""
+    (tmp_path / "f.txt").write_text("hi")
+    long = "/" + "/".join(["a" * 60] * 3) + "/mnt"  # about 190 characters
+    r = guest.run(f"print(open({long + '/f.txt'!r}).read(), len({long!r}))", None, "--mount", f"{long}={tmp_path}")
+    assert r.returncode == 0 and r.stdout.split() == ["hi", str(len(long))], r.stderr

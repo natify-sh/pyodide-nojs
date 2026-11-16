@@ -35,7 +35,7 @@ typedef struct {
     i32 n;
     i32 fd[MAXPRE];
     i32 len[MAXPRE];
-    char name[MAXPRE][64];
+    char *name[MAXPRE];  // each a malloc'd, NUL-terminated path (a mount's guest path can be as long as PATH_MAX)
 } Pre;
 __asm__(".globaltype pre_state, i32\npre_state:\n");
 static Pre *preopens(void) {
@@ -49,7 +49,9 @@ static Pre *preopens(void) {
             // tag is read at the width of its field (the invariant for every out-struct of a WASI call: read a field at its own width)
             u32 st[2] = {0, 0};
             if (w_fd_prestat_get(fd, st)) break;
-            if ((u8)st[0] != 0 || st[1] >= 63) continue;
+            if ((u8)st[0] != 0 || st[1] >= 4096) continue;
+            r->name[r->n] = (char *)malloc(st[1] + 1);
+            if (!r->name[r->n]) break;
             w_fd_prestat_dir_name(fd, r->name[r->n], (i32)st[1]);
             i32 l = (i32)st[1];
             while (l > 1 && r->name[r->n][l - 1] == '/') l--;  // "/dev/" -> "/dev"
