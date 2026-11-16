@@ -18,7 +18,7 @@ SIZE = 3 * (1 << 20) + 12345  # four pieces
 BODY = bytes((i * 7 + i // 251) & 255 for i in range(SIZE))
 
 
-def make_handler(ranges: bool, delay: float, seen: list[str]) -> type[http.server.BaseHTTPRequestHandler]:
+def make_handler(ranges: bool | str, delay: float, seen: list[str]) -> type[http.server.BaseHTTPRequestHandler]:
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
             pass
@@ -28,7 +28,11 @@ def make_handler(ranges: bool, delay: float, seen: list[str]) -> type[http.serve
             seen.append(rng or "-")
             time.sleep(delay)
             m = re.fullmatch(r"bytes=(\d+)-(\d+)", rng or "")
-            if ranges and m:
+            if ranges == "lying" and m:  # what jsDelivr answered to a Range without Accept-Encoding: identity
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {m[1]}-{m[2]}/2459042")
+                body = BODY
+            elif ranges and m:
                 a, b = int(m[1]), min(int(m[2]), SIZE - 1)
                 self.send_response(206)
                 self.send_header("Content-Range", f"bytes {a}-{b}/{SIZE}")
@@ -69,15 +73,17 @@ print(len(d), hashlib.sha256(d).hexdigest())
 """
 
 
-@pytest.mark.parametrize("ranges", [True, False])
-def test_the_bytes_are_the_same_with_and_without_ranges(flavor: str, server, ranges: bool, capfd) -> None:
+@pytest.mark.parametrize("ranges", [True, False, "lying"])
+def test_the_bytes_are_the_same_with_and_without_ranges(flavor: str, server, ranges: bool | str, capfd) -> None:
     url, seen, mode, _ = server
     mode[0] = ranges
     with Pyodide(flavor, inherit_network=True) as py:
         assert py.run("import hostnet; hostnet.install()\n" + PROG.format(url=url)) == 0
     assert capfd.readouterr().out.split() == [str(SIZE), hashlib.sha256(BODY).hexdigest()]
-    if ranges:
+    if ranges is True:
         assert len(seen) == 4 and seen[0] == "bytes=0-1048575" and seen[-1] == f"bytes={3 << 20}-{SIZE - 1}"
+    elif ranges == "lying":
+        assert seen == ["bytes=0-1048575", "-"]  # the piece did not fit what was asked: the file is asked for whole
     else:
         assert seen == ["bytes=0-1048575"]  # asked for a piece, answered with the whole file: taken as it is
 

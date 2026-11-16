@@ -71,40 +71,60 @@ def _piece(url, headers):
         time.sleep(0.5 * 2**attempt)
 
 
-def fetch(url, method="GET", headers=None, body=None):
-    """-> (status, reason, [(header, value)], body bytes, final url). Errors of the network are OSError.
-    A plain GET is asked for in pieces (`Range`, 1 MiB) when the server supports it: each host call is short, so
-    Ctrl-C is seen between pieces. A server that answers 200 to the first request is read as it always was."""
-    h = {k.lower(): v for k, v in dict(headers or {}).items()}
-    if method != "GET" or body or "range" in h:
-        return _fetch_once(url, method, headers, body)
-    st, reason, hdrs, data, final = _piece(url, {**dict(headers or {}), "Range": f"bytes=0-{CHUNK - 1}"})
-    rng = next((v for k, v in hdrs if k.lower() == "content-range"), "")
+def _span(hdrs):
+    """The (first, last, total) of a Content-Range header, or None."""
+    v = next((v for k, v in hdrs if k.lower() == "content-range"), "")
     try:
-        total = int(rng.rsplit("/", 1)[1])
-    except (IndexError, ValueError):
-        total = -1
-    if st != 206 or total < 0:
-        return st, reason, hdrs, data, final
+        unit, rest = v.split(None, 1)
+        rng, total = rest.split("/")
+        a, b = rng.split("-")
+        return (int(a), int(b), int(total)) if unit.lower() == "bytes" else None
+    except ValueError:
+        return None
+
+
+def _ranged(url, headers):
+    """The file in pieces; the answer of the first request as it is when the server does not give pieces (not 206);
+    None when a piece does not fit what was asked (a server that gets Range wrong: the caller asks for the file whole).
+    Each piece is checked: where it starts, how long it is, that the total stays the same, and the sum at the end."""
+    base = {**dict(headers or {}), "Accept-Encoding": "identity"}  # a compressed answer to a Range is not a piece
+    first = _piece(url, {**base, "Range": f"bytes=0-{CHUNK - 1}"})
+    st, reason, hdrs, data, final = first
+    if st != 206:
+        return first
+    span = _span(hdrs)
+    if span is None or span[0] != 0 or span[1] - span[0] + 1 != len(data) or span[2] <= span[1]:
+        return None
+    total = span[2]
     etag = next((v for k, v in hdrs if k.lower() == "etag"), None)
-    parts = [data]
-    got = len(data)
+    parts, got = [data], len(data)
     while got < total:
-        if not parts[-1]:
-            raise OSError(f"{url}: the server sent an empty piece at byte {got} of {total}")
-        more = {**dict(headers or {}), "Range": f"bytes={got}-{min(got + CHUNK, total) - 1}"}
-        if etag:
+        more = {**base, "Range": f"bytes={got}-{min(got + CHUNK, total) - 1}"}
+        if etag and not etag.startswith("W/"):
             more["If-Range"] = etag
         st2, _, h2, d2, _ = _piece(url, more)
-        if st2 != 206:
-            raise OSError(
-                f"{url}: the file changed or the server stopped answering ranges (status {st2}) at byte {got}"
-            )
+        sp = _span(h2)
+        if st2 != 206 or sp is None or sp[0] != got or sp[2] != total or sp[1] - sp[0] + 1 != len(d2) or not d2:
+            return None
         parts.append(d2)
         got += len(d2)
-    skip = {"content-range", "content-length"}
+    if got != total:
+        return None
+    skip = {"content-range", "content-length", "content-encoding"}
     hdrs = [(k, v) for k, v in hdrs if k.lower() not in skip] + [("Content-Length", str(total))]
     return 200, "OK", hdrs, b"".join(parts), final
+
+
+def fetch(url, method="GET", headers=None, body=None):
+    """-> (status, reason, [(header, value)], body bytes, final url). Errors of the network are OSError.
+    A plain GET is asked for in pieces (`Range`, 1 MiB) when the server gives them right: each host call is short, so
+    Ctrl-C is seen between pieces. A server that answers 200 to the first request, or whose pieces do not fit,
+    is read whole, as it always was."""
+    h = {k.lower() for k in dict(headers or {})}
+    if method != "GET" or body or "range" in h:
+        return _fetch_once(url, method, headers, body)
+    r = _ranged(url, headers)
+    return r if r is not None else _piece(url, headers)
 
 
 # ---------------------------------------------------------------- pyodide.http.pyfetch
