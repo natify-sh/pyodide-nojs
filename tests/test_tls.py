@@ -139,3 +139,26 @@ def test_https_to_pypi(guest: Guest):
     assert p.returncode == 0, p.stderr[-2000:]
     assert "OpenSSL 3.5" in p.stdout and "handshake TLSv1.3" in p.stdout and "urllib 200 six" in p.stdout
     assert "hostname check works" in p.stdout
+
+
+def test_windows_ca_bundle_comes_from_the_system_stores(monkeypatch: pytest.MonkeyPatch):
+    """On Windows Python has no CA file: the trusted roots come from the system stores (faked here: runs anywhere)."""
+    import ssl
+    import sys
+
+    from pyodide_nojs import _sockaddr
+
+    der = b"\x30\x03\x02\x01\x01"
+    calls: list[str] = []
+
+    def fake_enum(store: str):
+        calls.append(store)
+        return [(der, "x509_asn", True), (der + b"x", "x509_asn", False), (der, "pkcs_7_asn", True)]
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ssl, "enum_certificates", fake_enum, raising=False)
+    monkeypatch.setattr(ssl, "DER_cert_to_PEM_cert", lambda d: "PEM(" + d.hex() + ")")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    out = _sockaddr.ca_bundle()
+    assert calls == ["ROOT", "CA"]
+    assert out.count(b"PEM(" + der.hex().encode() + b")") == 2  # trusted x509 entries only, one per store

@@ -11,6 +11,7 @@ import re
 import socket
 import ssl
 import struct
+import sys
 from pathlib import Path
 
 from ._consts import SERVICES, Reader, Writer, guest_errno
@@ -104,6 +105,14 @@ def ca_bundle() -> bytes:
         if f and f not in seen and os.path.exists(f):
             seen.add(f)
             out += Path(f).read_bytes() + b"\n"
+    if sys.platform == "win32":  # no file there: Python takes the trusted roots from the system stores (what ssl does)
+        for store in ("ROOT", "CA"):
+            try:
+                for der, encoding, trust in ssl.enum_certificates(store):  # type: ignore[attr-defined,unused-ignore]
+                    if encoding == "x509_asn" and trust:
+                        out += ssl.DER_cert_to_PEM_cert(der).encode() + b"\n"
+            except OSError:
+                pass
     return out
 
 
