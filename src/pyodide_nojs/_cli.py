@@ -1,5 +1,5 @@
-"""pyodide-nojs [-c CODE | FILE | -m MODULE] [ARGS...]: run Python in Pyodide on wasmtime; with no code, a REPL on a
-terminal or the script on stdin."""
+"""pyodide-nojs [--] [-c CODE | FILE | -m MODULE] [ARGS...]: run Python in Pyodide on wasmtime; with no code, a REPL
+on a terminal or the script on stdin."""
 
 from __future__ import annotations
 
@@ -260,10 +260,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-v", "--verbose", action="store_true", help="log the loader and the network to stderr")
     ap.add_argument("--version", action="store_true", help="print the versions and exit")
     ap.set_defaults(module=None)  # -m is cut out of the arguments in main() before argparse sees them
-    ap.usage = "pyodide-nojs [OPTIONS] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]"
+    ap.usage = "pyodide-nojs [OPTIONS] [--] [-c CODE | FILE [ARGS...] | -m MODULE [ARGS...]]"
     args = sys.argv[1:] if argv is None else argv
     rest: list[str] = []
-    if "-m" in args:  # argparse must not see what follows MODULE
+    command: list[str] = []  # what follows `--`: Python's own command line
+    if "--" in args and not ap.parse_known_args(args[: args.index("--")])[0].file:  # (not a script's own `--`)
+        i = args.index("--")
+        if ap.parse_known_args(args[:i])[0].code is None:
+            args, command = args[:i], args[i + 1 :]
+    elif "-m" in args:  # argparse must not see what follows MODULE
         i = args.index("-m")
         head, tail = args[:i], args[i + 1 :]
         before, _ = ap.parse_known_args(head)
@@ -272,6 +277,16 @@ def main(argv: list[str] | None = None) -> int:
             if not rest:
                 ap.exit(2, "pyodide-nojs: error: -m: expected a module name\n")
     ns = ap.parse_args(args)
+    if command:  # after `--` it is CPython's rule: -c CODE, -m MODULE or a file, then the program's arguments
+        if command[0] in ("-c", "-m") and len(command) < 2:
+            what = "the program text" if command[0] == "-c" else "a module name"
+            ap.exit(2, f"pyodide-nojs: error: {command[0]}: expected {what}\n")
+        if command[0] == "-c":
+            ns.code, ns.args = command[1], command[2:]
+        elif command[0] == "-m":
+            rest = command[1:]
+        else:
+            ns.file, ns.args = command[0], command[1:]
     if rest:
         if ns.allow_top_level_await:
             ap.exit(2, "pyodide-nojs: error: --allow-top-level-await does not apply to -m\n")

@@ -85,3 +85,27 @@ def test_m_after_a_program_belongs_to_the_program(flavor: str, tmp_path: Path) -
     script.write_text("import sys\nprint(sys.argv[1:])\n")
     r = cli(flavor, str(script), "-m", "3")
     assert r.returncode == 0 and r.stdout == "['-m', '3']\n", (r.stdout, r.stderr)
+
+
+def test_after_a_double_dash_it_is_pythons_own_command_line(flavor: str, site: Path, tmp_path: Path) -> None:
+    r = cli(flavor, "--site", str(site), "--env", "K=V", "--", "-m", "mymod", "a", "--opt")
+    assert r.returncode == 0 and "__main__" in r.stdout and "'a', '--opt'" in r.stdout and r.stdout.endswith("V\n"), r
+    r = cli(flavor, "--", "-c", "import sys; print(sys.argv)", "-m", "x", "--flag")
+    assert r.returncode == 0 and r.stdout == "['-c', '-m', 'x', '--flag']\n", (r.stdout, r.stderr)
+    script = tmp_path / "prog.py"
+    script.write_text("import sys\nprint(sys.argv[1:])\n")
+    r = cli(flavor, "--", str(script), "-m", "3", "--x")
+    assert r.returncode == 0 and r.stdout == "['-m', '3', '--x']\n", (r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (["--", "-m"], "-m: expected a module name"),
+        (["--", "-c"], "-c: expected the program text"),
+        (["--allow-top-level-await", "--", "-m", "mymod"], "--allow-top-level-await does not apply to -m"),
+    ],
+)
+def test_wrong_use_after_a_double_dash_is_status_2(flavor: str, args: list[str], message: str) -> None:
+    r = cli(flavor, *args)
+    assert r.returncode == 2 and r.stderr.strip() == f"pyodide-nojs: error: {message}", r.stderr
