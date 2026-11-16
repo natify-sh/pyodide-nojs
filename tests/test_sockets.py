@@ -671,10 +671,17 @@ def seq():
 """
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="no select.poll there; Winsock's own error order is unchecked (BACKLOG 7)"
+)
 def test_a_refused_non_blocking_connect_reports_its_error_once(guest: Guest, port: int):
-    """send and recv after the refused connect give the error once and clear it, as the host's own sockets do."""
-    ns: dict = {}
-    exec("import socket, select, time, errno\n" + REFUSED, ns)
-    want = ns["seq"]()
+    """send and recv after the refused connect give the error once and clear it, as Linux does (the guest has Linux's
+    semantics whatever the host is: macOS's own kernel gives EPIPE to the first send and ECONNREFUSED to recv)."""
+    first = ["ECONNREFUSED", "EPIPE", "ok", 0]  # the op itself, then send, recv (b'': ok), SO_ERROR (cleared)
+    want = [
+        (f, op, first if op != "so_error" else ["ECONNREFUSED", "EPIPE"])
+        for f in ("poll", "sleep")
+        for op in ("send", "recv", "so_error")
+    ]
     out = run(guest, port, REFUSED + "print(seq())")
     assert out == [str(want)], (out, want)
