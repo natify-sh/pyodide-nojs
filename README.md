@@ -308,10 +308,10 @@ The wasm is built, not committed (`src/pyodide_nojs/data/` is ignored; CI builds
 uv sync                                  # the dev environment (add --group suite for the official suite)
 sh tools/build_data.sh pyo-build         # -> src/pyodide_nojs/data/*: fetches Pyodide, patches, converts, builds the adapter, fuses; wasm-opt.wasm from source takes ~12 min
 sh tools/build_ssl.sh pyo-build          # -> src/pyodide_nojs/data/tls: the real _ssl and ssl.py (needs uv, network, about 4 GB). The package does not start without data/tls and data/py
-sh tools/prepare_testenv.sh pyo-build    # -> pyo-build/testenv: numpy, openssl, cffi, the `test` wheel, python_tests.yaml
+sh tools/prepare_testenv.sh pyo-build    # -> pyo-build/testenv: numpy, cffi, the `test` package and a venv (all from a real `pyodide venv` and its pip), openssl, python_tests.yaml
 uv build --wheel                         # the wheel carries data/
 ```
-Needs an x86_64 Linux build host (`tools/fetch.sh` downloads `wasi-sdk-34.0-x86_64-linux`), node and npm (Node 20+; the CI uses 22), curl, git, python (and cmake and ninja for `wasm-opt.wasm`); uv and the network for `build_ssl.sh`; `--group suite` of `uv sync` for the official suite. `WASM_OPT_WASM=path` reuses a built `wasm-opt.wasm` and skips its 12 minutes. `data/py` (`micropip`, `packaging`) is made by `build_data.sh`.
+Needs an x86_64 Linux build host (`tools/fetch.sh` downloads `wasi-sdk-34.0-x86_64-linux`), node and npm (Node 20+; the CI uses 22), curl, git, python (and cmake and ninja for `wasm-opt.wasm`); uv and the network for `build_ssl.sh` and `prepare_testenv.sh` (which makes a Python 3.15 venv with `pyodide-build==0.39.3`, runs `pyodide venv` and the venv's own `pip install`: jsDelivr serves the wheels, the 36 MB `test` one can fail with a 503, run it again); `--group suite` of `uv sync` for the official suite. `WASM_OPT_WASM=path` reuses a built `wasm-opt.wasm` and skips its 12 minutes. `data/py` (`micropip`, `packaging`) is made by `build_data.sh`.
 
 ```sh
 uv run ruff check . && uv run ruff format --check . && uv run pyright
