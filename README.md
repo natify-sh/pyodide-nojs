@@ -14,7 +14,8 @@ Command line flags (`pyodide-nojs -h` has the rest): `--flavor fused|dynamic`, `
 ```python
 from pyodide_nojs import Pyodide
 
-with Pyodide() as py:  # the dynamic build (the default; $PYODIDE_NOJS_FLAVOR changes it); Pyodide("fused") for the other
+# the dynamic build is the default ($PYODIDE_NOJS_FLAVOR changes it); Pyodide("fused") is the other
+with Pyodide() as py:
     py.run("import json; print(json.dumps({'a': 1}))")  # 0 if it ran, 1 if it raised, N for sys.exit(N)
     py.run("import sys; sys.exit(3)")  # -> 3, the interpreter stays usable
 ```
