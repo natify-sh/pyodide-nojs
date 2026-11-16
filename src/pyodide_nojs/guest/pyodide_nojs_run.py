@@ -7,12 +7,12 @@ import sys
 import traceback
 
 
-def start(site_first):
+def start():
     """Run at every start, also after a snapshot restore (so it is idempotent). /tmp and /home/pyodide are 0o777 in
     Pyodide, and the guest's modes are the adapter's own records, not the host's; stdin and stdout are line buffered, as
     Pyodide's (a line printed before a trap or os._exit is kept); '' first in sys.path as Pyodide's JavaScript puts
-    it after the init (not with PYTHONSAFEPATH); with site= the user's packages come before the stdlib zip (a real
-    _ssl over the zip's stub, as before)."""
+    it after the init (not with PYTHONSAFEPATH); site-packages comes before the stdlib zip (the real
+    _ssl and ssl.py over the zip's stub)."""
     import os
 
     for d in ("/tmp", "/home/pyodide"):
@@ -23,7 +23,7 @@ def start(site_first):
     if not sys.flags.safe_path and sys.path[:1] != [""]:
         sys.path.insert(0, "")
     sp = f"/lib/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages"
-    if site_first and sp in sys.path:
+    if sp in sys.path:
         sys.path.remove(sp)
         sys.path.insert(0 if sys.flags.safe_path else 1, sp)
 

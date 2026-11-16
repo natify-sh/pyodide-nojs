@@ -36,7 +36,7 @@ files (`mounts={"/data": "/host/dir"}`), sockets, `ctypes`/`cffi`. What needs th
 
 `await micropip.install("numpy")` works with no JavaScript: the package carries `pyodide-lock.json`, the lock of the pinned release (31 packages: numpy, scipy, cffi, pytest, micropip...,
 not Pyodide's whole index), and in the guest `micropip` resolves a name in it first, downloads the wheel from `https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/` (sha256 checked) and unpacks it
-(`guest/pyodide_lock.py`, hooked by `guest/pyodide_nojs_start.py`, which a `.pth` file runs at start, when `micropip` is imported; `micropip` itself comes with `site=`). It needs HTTPS: call `hostnet.install()` (the host's fetch) or have the guest's own TLS (`_ssl`: built by `tools/build_ssl.sh`, which `tools/prepare_testenv.sh` runs for the tests; it is not in the wheel). A package not in the lock still comes from PyPI as before;
+(`guest/pyodide_lock.py`, hooked by `guest/pyodide_nojs_start.py`, which a `.pth` file runs at start, when `micropip` is imported; `micropip` itself comes with `site=`). It needs HTTPS: call `hostnet.install()` (the host's fetch) or rely on the guest's own TLS (always there: the real `_ssl` with OpenSSL 3.5.9 and CPython's `ssl.py` from the package's `data/tls`, built by `tools/build_ssl.sh`, in the wheel; Pyodide's own `ssl` is a stub). A package not in the lock still comes from PyPI as before;
 a lock package already installed in the guest (by any source) is not fetched again or overwritten; scipy installs and runs (`scipy.linalg.det`). Only lock entries whose `package_type` is not `package` (the shared libraries `libopenblas`, `libopenssl`, `test-cpp-exceptions` and `test-sharedlib`) raise `NotImplementedError`: they need Pyodide's JavaScript loader.
 The lock and the guest files `pyodide_lock.py`, `hostnet.py`, `pyodide_nojs.pth` and `pyodide_nojs_start.py` are written before the `site=` folders, so a `site=` file of the same name wins; `pyodide_nojs_run.py` (the host's status protocol) is written after them, so ours always wins. A guest sees `pyodide_nojs_start` and `pyodide_nojs_run` in `sys.modules`; there is no `sitecustomize` (`import sitecustomize` raises `ModuleNotFoundError` unless a `site=` folder has one, and then it runs as in CPython); `__main__` holds none of the start or run code's names.
 
@@ -76,10 +76,10 @@ One toolchain: **wasi-sdk 34's clang** builds `adapter.wasm`, `wasm-opt.wasm` an
 ```sh
 uv sync
 sh tools/build_data.sh pyo-build    # -> src/pyodide_nojs/data/*  (wasm-opt.wasm from source takes ~12 min; WASM_OPT_WASM=path reuses one)
-sh tools/prepare_testenv.sh pyo-build # -> pyo-build/testenv: numpy, micropip, openssl, the real _ssl, the `test` wheel, python_tests.yaml
+sh tools/prepare_testenv.sh pyo-build # -> pyo-build/testenv: numpy, micropip, openssl, a copy of `data/tls`, the `test` wheel, python_tests.yaml
 uv build --wheel               # the wheel carries data/ (the wasm is built, not committed)
 ```
-Needs: node, npm, curl, git, cmake and ninja (for `wasm-opt.wasm`), perl and make (OpenSSL's `opensslconf.h`).
+Needs: node, npm, curl, git, cmake and ninja (for `wasm-opt.wasm`); `data/tls` (`sh tools/build_ssl.sh pyo-build`) before `prepare_testenv.sh`.
 
 ## Tests
 ```sh

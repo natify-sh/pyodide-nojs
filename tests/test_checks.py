@@ -46,7 +46,7 @@ NET = [
     r"^cffi \(binary wheel via micropip\) 2\.0\.0 25 10$",
 ]
 TLS = [
-    r"^ssl OpenSSL 1\.1\.1w .*_ssl\.cpython-315-wasm32-emscripten\.so$",
+    r"^ssl OpenSSL 3\.5\.\d+ .*_ssl\.cpython-315-wasm32-emscripten\.so$",
     r"^handshake TLSv1\.3 \S+ \| peer cert subject CN: pypi\.org$",
     r"^raw response: HTTP/1\.1 200 OK$",
     r"^urllib 200 six$",

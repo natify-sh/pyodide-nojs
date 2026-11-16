@@ -93,6 +93,8 @@ class Pyodide:
     >>> py.run("print(1 + 1)")               # 0 if the code ran, 1 if it raised (the traceback is on stderr)
 
     ``site``: a folder (or several) copied into the guest's ``site-packages`` (a wheel unpacked, ``micropip``...);
+    The guest's ``ssl`` is always the real one: ``_ssl`` (OpenSSL 3.5.9) and CPython's own ``ssl.py`` from the
+    package's ``data/tls`` (``tools/build_ssl.sh``), copied into ``site-packages`` ahead of the stdlib zip's stub.
     ``mounts``: ``{guest path: host folder}`` preopened as they are (the guest can write there);
     ``env``: more environment variables.
     The guest is isolated: its environment is Pyodide's minimal one (``BASE_ENV``) plus ``env``, never the host's,
@@ -152,6 +154,7 @@ class Pyodide:
             )
         self.flavor = flavor
         self.site = [site] if isinstance(site, (str, os.PathLike)) else list(site or [])
+        self.tls_dir = self._tls_folder()
         self.mounts = {k: str(v) for k, v in (mounts or {}).items()}
         for guest in self.mounts:
             at = posixpath.normpath("/" + guest.lstrip("/"))
@@ -212,6 +215,21 @@ class Pyodide:
         )
 
     # ------------------------------------------------------------------ the guest's root
+    def _tls_folder(self) -> Path:
+        """The real `_ssl` and `ssl.py` of the package (`data/tls`, `tools/build_ssl.sh`): `_setup_root` copies them
+        into site-packages, `_at_start` puts that ahead of the stdlib zip's stub, `_tls_key` keys the snapshot."""
+        d = self.data / "tls"
+        if not d.is_dir():
+            raise FileNotFoundError(
+                f"the guest's real _ssl is missing: no {d}; build it with `sh tools/build_ssl.sh pyo-build`"
+            )
+        return d
+
+    def _tls_key(self) -> list[list[str]]:
+        """The files' own stamps (size and mtime, as the other data files)."""
+        files = sorted(self.tls_dir.iterdir())
+        return [[f.name, _engine.file_stamp(f).decode()] for f in files if f.is_file()]
+
     def _setup_root(self) -> None:
         self.root = root = Path(tempfile.mkdtemp(prefix="pyodide_nojs_"))
         (root / "lib" / f"python{PYVER}" / "lib-dynload").mkdir(parents=True)  # CPython looks for it at start
@@ -227,7 +245,10 @@ class Pyodide:
         lock = self.data / "pyodide-lock.json"  # Pyodide's package lock, for micropip (guest/pyodide_lock.py)
         if lock.exists():
             shutil.copy(lock, sp / "pyodide-lock.json")
-        for s in self.site:  # inside the preopen: WASI does not follow a link out of it
+        for s in [
+            self.tls_dir,
+            *self.site,
+        ]:  # inside the preopen: WASI does not follow a link out of it
             shutil.copytree(s, sp, dirs_exist_ok=True)
         shutil.copy(GUEST / "pyodide_nojs_run.py", sp)  # the host's own protocol: ours always wins
         for guest in self.mounts:  # a placeholder, so that a directory listing of the parent shows the mount
@@ -1101,7 +1122,7 @@ class Pyodide:
         return list(env.items())
 
     def _at_start(self) -> str:
-        return f"__import__('pyodide_nojs_run').start({bool(self.site)!r})\n"
+        return "__import__('pyodide_nojs_run').start()\n"
 
     def _chdir_home(self) -> None:
         """Pyodide's JavaScript starts the guest in HOME (the cwd is not in a snapshot: this is run after a restore)."""
@@ -1149,6 +1170,7 @@ class Pyodide:
                     if (f := self.data / "pyodide-lock.json").exists()
                     else None,
                     self._wasi_env(),
+                    self._tls_key(),
                     [isatty(fd) for fd in (0, 1, 2)],  # the guest decides buffering at init
                     # the time module read the host's zone at init (tzname, timezone, daylight, as _tzset_js gives them)
                     [time.localtime().tm_year, *_timecalc.year_minutes(time.localtime().tm_year)],

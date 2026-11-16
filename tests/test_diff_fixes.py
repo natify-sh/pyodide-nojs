@@ -124,7 +124,7 @@ def test_guest_environment_is_pyodides_and_isolated(guest: Guest, monkeypatch: p
     assert not {"PYTHONHOME", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"} & set(names)
     assert home == "/home/pyodide /home/pyodide web_user ['/']"
     p = eval(path)  # noqa: S307
-    assert p == ["", "/lib/python315.zip", "/lib/python3.15/lib-dynload", "/lib/python3.15/site-packages"]
+    assert p == ["", "/lib/python3.15/site-packages", "/lib/python315.zip", "/lib/python3.15/lib-dynload"]
     assert "pyodide" in eval(listing.rsplit(" ", 1)[0])  # noqa: S307
 
 

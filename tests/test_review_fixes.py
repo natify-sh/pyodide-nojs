@@ -192,9 +192,10 @@ import _pyodide_core
 """
 # Pyodide's own values (the real 315.0.0a2 on Node: executable and orig_argv are the script's path there, the web has
 # Emscripten's default thisProgram "./this.program")
+# except sys.path: site-packages is ahead of the zip, so that the real _ssl of data/tls wins
 STARTUP_WANT = [
     "/home/pyodide/this.program /home/pyodide/this.program ['./this.program'] ['']",
-    "['', '/lib/python315.zip', '/lib/python3.15/lib-dynload'] /lib/python315.zip /home/pyodide []",
+    "['', '/lib/python3.15/site-packages', '/lib/python315.zip'] /lib/python315.zip /home/pyodide []",
     "/lib/python315.zip/zipimport.py /lib/python315.zip/zipimport.py /lib/python315.zip/os.py",
     "True 1 /",
 ]
@@ -336,14 +337,14 @@ print(stat.S_ISCHR(os.fstat(1).st_mode))
 
 def test_site_folders_come_before_the_stdlib_zip(guest: Guest, tmp_path: Path) -> None:
     """Regression: a `site=` folder's real `_ssl` lost to the stub `_ssl.py` of the stdlib zip when site-packages
-    was last. With `site=` they come first (as before); without it the order is Pyodide's."""
+    was last. site-packages is always ahead of the zip (also without `site=`: data/tls)."""
     (tmp_path / "colorsys.py").write_text("MARK = 'from the site folder'\n")
     code = "import sys, colorsys; print(sys.path[1:3]); print(getattr(colorsys, 'MARK', None))"
     r = guest.run(code, None, "--site", str(tmp_path))
     assert r.returncode == 0, r.stderr
     assert r.stdout.splitlines() == ["['/lib/python3.15/site-packages', '/lib/python315.zip']", "from the site folder"]
     r = guest.run(code)
-    assert r.stdout.splitlines() == ["['/lib/python315.zip', '/lib/python3.15/lib-dynload']", "None"], r.stderr
+    assert r.stdout.splitlines() == ["['/lib/python3.15/site-packages', '/lib/python315.zip']", "None"], r.stderr
 
 
 def test_a_site_folders_own_sitecustomize_runs_beside_ours(guest: Guest, tmp_path: Path) -> None:
