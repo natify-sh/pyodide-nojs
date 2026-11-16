@@ -67,7 +67,7 @@ Two packagings of the same sources, both in the wheel, both tested:
 
 Wheels with legacy exceptions (every Emscripten wheel of Pyodide's CDN with C++ exceptions, numpy's two modules...) are converted at
 `dlopen` by **`wasm-opt.wasm`**: Binaryen 132 as a `wasm32-wasip1` module, run in-process by wasmtime-py. Machine code of the big modules is cached in
-`~/.cache/pyodide-nojs` (`$PYODIDE_NOJS_CACHE`), so the first start compiles for a few seconds (5.4 s here) and a later one takes about a second (1.1 s here). The environment variables are `PYODIDE_NOJS_*` (`CACHE`, `DATA`, `FLAVOR`, `SNAPSHOT`, `ASM_WASM`, `STDLIB`); the old `PYODIDE_WASMTIME_*` names are accepted during the alpha.
+`~/.cache/pyodide-nojs` (`$PYODIDE_NOJS_CACHE`), so the first start compiles for a few seconds (5.4 s here) and a later one takes about a second (1.1 s here). The environment variables are `PYODIDE_NOJS_*` (`CACHE`, `DATA`, `FLAVOR`, `SNAPSHOT`, `ASM_WASM`, `STDLIB`). `$WASM_OPT` names the tool that converts a wheel's legacy exceptions at `dlopen`: a `wasm-opt.wasm` (run in-process) or a command line such as `wasm-opt`; by default the package's own `wasm-opt.wasm`.
 
 More in [docs/EXPERIMENT.md](docs/EXPERIMENT.md) (the experiment this came from: results, what the adapter answers, TLS in the guest, what was found on the way)
 and [docs/NOTES-FUSEDWASI-AND-TESTSUITE.md](docs/NOTES-FUSEDWASI-AND-TESTSUITE.md) (WASI 0.2 over fusedwasi, next).

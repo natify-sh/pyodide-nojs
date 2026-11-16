@@ -1,10 +1,9 @@
 # micropip and requests over the guest's own TLS: no host fetch, only the host's sockets.
-import hostnet
+import asyncio
 
-hostnet.native()  # urllib3 on sockets (its emscripten backend needs JavaScript); hostnet.run is the asyncio loop
 import micropip
 
-hostnet.run(micropip.install(["six", "requests"]))
+asyncio.run(micropip.install(["six", "requests"]))
 import requests
 import six
 

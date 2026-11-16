@@ -11,13 +11,10 @@ table slot the host wrote to `_hostnet_slots`; `ffi_call_js` is in the adapter).
 * a urllib handler for http and https, installed globally, so `urllib.request.urlopen` works (micropip
   outside the browser fetches with it);
 * a module in the place of `urllib3.contrib.emscripten.fetch` (which needs JavaScript), so `requests` works;
-* `run(coro)`: an asyncio loop with no I/O of its own.
 
-`install()` puts pyfetch, the urllib handler and the urllib3 module in place; `fetch` and `run` work without it.
+`install()` puts pyfetch, the urllib handler and the urllib3 module in place; `fetch` works without it.
 """
 
-import asyncio
-import asyncio.base_events
 import ctypes
 import email.message
 import io
@@ -186,36 +183,6 @@ class HostHandler(urllib.request.BaseHandler):
     http_open = https_open = _open
 
 
-# ---------------------------------------------------------------- asyncio with no I/O
-class _NoSelector:
-    def select(self, timeout=None):
-        if timeout:
-            time.sleep(min(timeout, 0.01))
-        return []
-
-
-class Loop(asyncio.base_events.BaseEventLoop):
-    def __init__(self):
-        super().__init__()
-        self._selector = _NoSelector()
-
-    def _process_events(self, event_list):
-        pass
-
-    def _write_to_self(self):
-        pass
-
-
-def run(coro):
-    loop = Loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()  # one loop per await: an unclosed one is a ResourceWarning
-
-
 # ---------------------------------------------------------------- urllib3 (and so requests)
 # On sys.platform == "emscripten" urllib3 sends through `urllib3.contrib.emscripten.fetch`, which needs
 # JavaScript (XMLHttpRequest / JSPI). This module takes its place before urllib3 is imported: the same
@@ -274,11 +241,3 @@ def install():
     ):  # the start's no-op: urllib3's own emscripten backend takes the fetch below
         del _sys.modules["urllib3.contrib.emscripten"]
     _sys.modules["urllib3.contrib.emscripten.fetch"] = _u3
-
-
-def native():
-    """The guest's own sockets and TLS (a real `_ssl`): urllib3 keeps its socket backend instead of the
-    emscripten one (which needs JavaScript); urllib and http.client need nothing."""
-    m = _types.ModuleType("urllib3.contrib.emscripten")
-    m.inject_into_urllib3 = lambda: None
-    _sys.modules.setdefault("urllib3.contrib.emscripten", m)

@@ -1,5 +1,7 @@
 # Networking without JavaScript: the host's fetch under pyfetch, urllib, micropip and requests, and a
 # binary Pyodide wheel installed by micropip and loaded by the adapter's loader.
+import asyncio
+
 import hostnet
 
 hostnet.install()  # first: pyfetch, the urllib handler and urllib3's fetch go to the host
@@ -13,9 +15,9 @@ async def pyfetch_check():
     print("pyfetch", r.status, r.ok, d["info"]["name"])
 
 
-hostnet.run(pyfetch_check())
+asyncio.run(pyfetch_check())
 
-hostnet.run(micropip.install(["six", "attrs", "requests"]))
+asyncio.run(micropip.install(["six", "attrs", "requests"]))
 import requests  # noqa: E401, E402
 
 print("micropip: six, attrs, requests (+ urllib3, idna, certifi, charset-normalizer) imported")
@@ -23,7 +25,7 @@ r = requests.get("https://pypi.org/pypi/micropip/json")
 print("requests.get", r.status_code, r.headers.get("content-type"), r.json()["info"]["name"])
 
 B = "https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/"
-hostnet.run(micropip.install(["pycparser", B + "cffi-2.0.0-cp315-cp315-pyemscripten_2026_5_wasm32.whl"]))
+asyncio.run(micropip.install(["pycparser", B + "cffi-2.0.0-cp315-cp315-pyemscripten_2026_5_wasm32.whl"]))
 import cffi  # noqa: E402
 
 ffi = cffi.FFI()

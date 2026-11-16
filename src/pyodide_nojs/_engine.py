@@ -43,8 +43,8 @@ def require_wasmtime() -> Any:
 
 
 def env(name: str) -> str | None:
-    """$PYODIDE_NOJS_X, else the old $PYODIDE_WASMTIME_X: the old names are accepted during the alpha."""
-    return os.environ.get(name) or os.environ.get("PYODIDE_WASMTIME_" + name.removeprefix("PYODIDE_NOJS_"))
+    """The environment variable NAME ($PYODIDE_NOJS_...), or None."""
+    return os.environ.get(name)
 
 
 def cache_dir() -> Path:

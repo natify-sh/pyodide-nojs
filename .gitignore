@@ -19,10 +19,9 @@ htmlcov/
 # built by tools/build_data.sh (not committed; CI builds them, the wheel carries them)
 src/pyodide_nojs/data/*
 !src/pyodide_nojs/data/.gitkeep
-# compiled-module caches, work directories of the build and of the test runs
+# compiled-module caches, and the work folder of the build and of the test runs
 *.cwasm
 /pyo-build/
-/work/
 
 # git worktrees of the agents that work in parallel (each is its own checkout)
 /.claude/worktrees/

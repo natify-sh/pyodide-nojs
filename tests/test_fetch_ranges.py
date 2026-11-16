@@ -13,6 +13,7 @@ from collections.abc import Iterator
 import pytest
 
 from pyodide_nojs import Pyodide
+from pyodide_nojs._cli import SETUP
 
 SIZE = 3 * (1 << 20) + 12345  # four pieces
 BODY = bytes((i * 7 + i // 251) & 255 for i in range(SIZE))
@@ -142,16 +143,15 @@ hostnet.install()
 
 def test_an_await_in_the_repl_leaves_no_unclosed_loop(flavor: str, capfd) -> None:
     prog = """\
-import asyncio, gc, warnings, hostnet
-async def f():
-    await asyncio.sleep(0)
+import gc, warnings
 with warnings.catch_warnings(record=True) as w:
     warnings.simplefilter("always")
-    hostnet.run(f())
-    hostnet.run(f())
+    _console.push("import asyncio")
+    _console.push("await asyncio.sleep(0)")
+    _console.push("await asyncio.sleep(0)")
     gc.collect()
-print("warnings", [str(x.message) for x in w])
+print("warnings", [str(x.message) for x in w if issubclass(x.category, ResourceWarning)])
 """
-    with Pyodide(flavor) as py:
+    with Pyodide(flavor, preload=SETUP.format(aw=True)) as py:
         assert py.run(prog) == 0
     assert capfd.readouterr().out.strip() == "warnings []"

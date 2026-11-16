@@ -63,10 +63,10 @@ except ssl.SSLCertVerificationError as e:
     print("refused:", e.verify_message)
 """
 NUMPY_WHEEL = """
-import hostnet
+import asyncio, hostnet
 hostnet.install()
 import micropip
-hostnet.run(micropip.install("https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/numpy-2.4.3-cp315-cp315-pyemscripten_2026_5_wasm32.whl"))
+asyncio.run(micropip.install("https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/numpy-2.4.3-cp315-cp315-pyemscripten_2026_5_wasm32.whl"))
 """
 
 

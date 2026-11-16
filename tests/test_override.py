@@ -77,15 +77,6 @@ def test_api_and_env(asm: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         Pyodide()
 
 
-def test_old_env_names_are_still_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The PYODIDE_WASMTIME_* names of before the rename are read when the PYODIDE_NOJS_* one is not set."""
-    monkeypatch.delenv("PYODIDE_NOJS_CACHE", raising=False)
-    monkeypatch.setenv("PYODIDE_WASMTIME_CACHE", str(tmp_path / "old"))
-    assert _engine.cache_dir() == tmp_path / "old"
-    monkeypatch.setenv("PYODIDE_NOJS_CACHE", str(tmp_path / "new"))
-    assert _engine.cache_dir() == tmp_path / "new"
-
-
 def test_stdlib_override_is_the_one_used(tmp_path: Path) -> None:
     z = tmp_path / "std.zip"
     shutil.copyfile(data_dir() / "python_stdlib.zip", z)
