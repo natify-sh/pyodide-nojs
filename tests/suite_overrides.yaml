@@ -79,3 +79,26 @@ test_importlib.extension.test_loader:
       are _ctypes_test, _testbuffer, _testcapi, _testimportmultiple, _testinternalcapi, _testmultiphase), so
       util.EXTENSIONS.path is None; this is Pyodide's own `TODO: why does it fail?` xfail of the whole module, the other
       tests of it pass
+
+test_ssl:
+  - skip:
+      - "*SimpleBackgroundTestsTLS_1_3.test_ciphersuite_downgrade"
+      - "*SimpleBackgroundTestsTLS_1_3.test_ciphersuite_mismatch"
+      - "*SimpleBackgroundTestsTLS_1_3.test_ciphersuites"
+      - "*TestPostHandshakeAuth.test_bpo37428_pha_cert_none"
+      - "*TestPostHandshakeAuth.test_certificate_chain"
+      - "*TestPostHandshakeAuth.test_internal_chain_client"
+      - "*TestPostHandshakeAuth.test_internal_chain_server"
+      - "*TestPostHandshakeAuth.test_pha_no_pha_client"
+      - "*TestPostHandshakeAuth.test_pha_no_pha_server"
+      - "*TestPostHandshakeAuth.test_pha_not_tls13"
+      - "*TestPostHandshakeAuth.test_pha_optional"
+      - "*TestPostHandshakeAuth.test_pha_optional_nocert"
+      - "*TestPostHandshakeAuth.test_pha_required"
+      - "*TestPostHandshakeAuth.test_pha_required_nocert"
+      - "*TestSSLDebug.test_keylog_filename"
+    reason: >-
+      the tests start a ThreadedEchoServer (threading.Thread.start), and the guest has no threads: RuntimeError "can't
+      start new thread", the same limit as in Pyodide (python_tests.yaml skips ThreadedTests and SimpleBackgroundTests
+      for it; these are the other classes that use the same server and are not on its list). All 15 end with that
+      error; the other tests of the module (the real ssl, contexts, certificates, ciphers) pass
