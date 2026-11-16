@@ -1,5 +1,6 @@
-"""Offline: the first batch of differences the differential audits found against Pyodide (docs/DIFF_AUDIT_runtime.md
-N2-N9, docs/DIFF_AUDIT_files.md N1-N4), on both packagings. Each test fails on the build before the fix."""
+"""Offline: the first batch of differences the differential audits found against Pyodide (a callback that makes a WASI
+call, exit statuses, the CPU clocks, the excepthook, line buffering, the environment, `lseek`, `read(0, 0)`, the
+preopens), on both packagings. Each test fails on the build before the fix."""
 
 from __future__ import annotations
 

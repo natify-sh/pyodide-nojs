@@ -1,6 +1,6 @@
 # ruff: noqa
 # type: ignore
-# One minimal program per NEW difference of docs/DIFF_AUDIT_runtime.md (run each alone: they are deterministic).
+# One minimal program per difference the runtime probes found (docs/DIFFERENCES.md; run each alone: they are deterministic).
 # --- N1 mktime year -271821 isdst=1
 import time
 

@@ -2,7 +2,7 @@
 # The run time's wasm-opt: Binaryen version_132 as a wasm32-wasip1 module, with wasi-sdk 34:
 #   sh tools/build_binaryen.sh WORKDIR   -> src/pyodide_nojs/data/wasm-opt.wasm (or $OUT)
 # ~12 min on 2 cores; wasi-sdk 34 (tools/fetch.sh) is the one toolchain. The loader runs it in-process under
-# wasmtime-py (_tools.py) to convert a wheel's legacy exceptions at dlopen; the build itself uses npm's Binaryen.
+# wasmtime-py (_engine.py) to convert a wheel's legacy exceptions at dlopen; the build itself uses npm's Binaryen.
 #   - C++ exceptions: Binaryen uses them (Precompute, the parsers), so -fwasm-exceptions in the exnref form
 #     (-wasm-use-legacy-eh=false; wasmtime has no legacy exceptions) and wasi-sdk's eh/ libc++, libunwind
 #   - threads: wasip1 has none; Binaryen's thread pool catches the failed std::thread and runs on one

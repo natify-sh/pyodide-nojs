@@ -9,7 +9,7 @@ How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the
 
 * **imports and signatures**: `Module(...).imports` of `src/pyodide_nojs/data/{pyodide_fused,adapter,pyodide.asm}.wasm` (wasmtime-py), counted by module; the signature columns below were compared with that list (all 38 match).
 * **calls at run time**: a throw-away script (not in the repo) that wrapped every `loader`/`net`/`fs` function of `Pyodide._ops()` with a counter and ran `Pyodide(flavor=...).run(...)`; same result on both packagings (run again on 2026-11-16 for the two programs of section 4).
-* **BACKLOG 8**: the numbers of the real Pyodide 315.0.0-alpha.2 under Node (49 distinct imports at boot, and the sizes of the host), taken from `BACKLOG.md` "Order of work", item 8; not re-measured here.
+* **the real Pyodide under Node** (section 4): counting wrappers around the glue's `wasmImports` of Pyodide 315.0.0-alpha.2, 2026-11-15; the script is not in the repository and the numbers were not re-measured here. The sizes of the host (section 5) are `wc -l` of the same day and of 2026-11-16.
 
 ## 1. What the host is
 
@@ -82,9 +82,9 @@ in `wasm/adapter/common.h` (`LOADER`, `FS`, `aux`) and `wasm/adapter/sockets.h` 
 | `loader.sym` | `(iiii)->i` | the export `name` of module id: a global's value, or a table slot (the slot the function already had, or a new one) | the host keeps each instance's exports by name; reading an export is `Instance.exports` | no, while the host keeps the instances. If `instantiate` returned the export list (name, kind, index) once, `dlsym` would be a lookup in the adapter's own table: movable at the cost of a bulk transfer per load (not tried) |
 | `loader.call` | `(iii)->i` | call export `name` (no arguments) of module id if it exists: `__wasm_call_ctors`, `__wasm_apply_data_relocs`, the init functions | an export of another instance is reachable only through the host's `Instance` | movable if `sym` gave the table slot: `call_indirect` of that slot would do (weak justification; not tried) |
 | `loader.scope` | `(ii)->` | the module's exports join the global namespace (scope 0) or one `dlopen` call's scope | pure bookkeeping of the host's `instances`/`scopes` lists | **movable**: a registry of ids per scope; it is host-side only because `sym` searches there. Moves with `sym` |
-| `loader.error` | `(iiiii)->` | set `dlerror`'s text from a failure code, the library name and one argument (V8's `LinkError`/`CompileError` wording), through the main module's `__dl_seterr` | none for the text; the engine's reason for a failed `instantiate` (`Module` compile or link message) is an engine fact | **movable**: every text but code 11 is a table of strings and a call into `__dl_seterr`, both wasm; code 11 would be the message `instantiate` kept (BACKLOG section 9, "The thin host") |
+| `loader.error` | `(iiiii)->` | set `dlerror`'s text from a failure code, the library name and one argument (V8's `LinkError`/`CompileError` wording), through the main module's `__dl_seterr` | none for the text; the engine's reason for a failed `instantiate` (`Module` compile or link message) is an engine fact | **movable**: every text but code 11 is a table of strings and a call into `__dl_seterr`, both wasm; code 11 would be the message `instantiate` kept (the thin-host item of `BACKLOG.md`) |
 | `loader.depth` | `()->i` | how many NEEDED libraries may nest | the wasm stack in force is the engine's (`max_wasm_stack`, `depth_cap`) | no: a fact of the engine configuration (a constant would be wrong on a host with another stack) |
-| `loader.ffi_call` | `(iiii)->` | libffi's `ffi_call`: read the `cif`, call the function with the callee's real wasm type | a call whose signature is known only at run time needs a function of that type: JavaScript's `wasmTable.get(fn)(...args)`; wasm has `call_indirect` with a compile-time type only | no for the call; the decoding of the `cif` (`_cif.py`) is pure logic and **movable**, at the price of an ffi call that now costs 59 us (BACKLOG 8) |
+| `loader.ffi_call` | `(iiii)->` | libffi's `ffi_call`: read the `cif`, call the function with the callee's real wasm type | a call whose signature is known only at run time needs a function of that type: JavaScript's `wasmTable.get(fn)(...args)`; wasm has `call_indirect` with a compile-time type only | no for the call; the decoding of the `cif` (`_cif.py`) is pure logic and **movable**, at the price of an ffi call that now costs 59 us (a callback 168 us) |
 | `loader.ffi_prep` | `(iiiii)->i` | libffi's `ffi_prep_closure_loc`: put a function of the closure's signature into the closure's table slot; when called it runs `fun(cif, ret, args, user_data)` | creating a function of a signature known at run time is `Func(store, FuncType, callback)` (JavaScript's `convertJsFunctionToWasm`) | no as a host function; in wasm it would need a generated thunk module per signature through `instantiate`: possible, cost unknown. The signature decoding (`_cif.closure_signature`, `closure_frame`, `closure_result`) is pure logic, **movable** |
 | `loader.ffi_slot` | `()->i` | `getEmptyTableSlot()`: a freed slot, else the table grown by one | `table.grow` of the main module's table | **movable**: the free list is Python, the grow is `aux.table_grow`, which the dynamic adapter already calls; weak justification (not tried) |
 | `loader.ffi_free` | `(i)->` | free a closure's slot: null it, return its `Func` to the pool | releases an engine `Func` held by the host | partly: the slot's `table.set(null)` and the free list are wasm; the pooled `Func` is the host's |
@@ -156,8 +156,8 @@ host's DNS and its trust store are the OS's facts.
 | group | count | who answers |
 |---|---|---|
 | `env` imports of `adapter.wasm` (11) | `memory`, `__indirect_function_table`, `__stack_pointer`, `__memory_base`, `__table_base`, `malloc`, `calloc`, `free`, `getentropy`, `emscripten_builtin_memalign`, `_emscripten_find_dylib` | the main module's own exports and globals, linked by the host (checked by `tests/test_shape.py`) |
-| `env` imports of `pyodide.asm.wasm` | 264 declared; 91 are exports of `adapter.wasm` by name, 173 not (stubs in the shim: the JavaScript bridge, test hooks, GL/SDL; BACKLOG 8 says 172: the 264 audit entries, `docs/IMPORT_AUDIT.md`) | the adapter through the shim's `call_indirect` table; the rest return 0/null |
-| `GOT.func` imports of `pyodide.asm.wasm` | 280 | globals in the shim (BACKLOG 8: 277 of them GL/`console_*` pulled in by the link line) |
+| `env` imports of `pyodide.asm.wasm` | 264 declared; 91 are exports of `adapter.wasm` by name, 173 not (stubs in the shim: 169 JavaScript bridge and hooks, 3 epoll calls answered ENOSYS, and the trampoline, which is WAT; the per-import list is `docs/IMPORT_AUDIT.md`) | the adapter through the shim's `call_indirect` table; the rest return 0/null |
+| `GOT.func` imports of `pyodide.asm.wasm` | 280 | globals in the shim (277 of them `emscripten_gl*`, `console_*`, `out`, `err`, pulled in by Pyodide's link line with `-lGL -legl.js -lwebgl.js -lhtml5.js -lsdl.js`: no use for a server host) |
 | WASI of `pyodide.asm.wasm` | 14 | section 2 |
 
 All of these are wasm or engine plumbing in `_start`; nothing in the table is a new host function. The fused module has
@@ -187,15 +187,20 @@ re-derived from those runs.
 | sockets, DNS, `ssl`/fetch | all of `net.*` and the host's `fetch` |
 | terminal programs, `os.statvfs`, CPU clocks | `fs.ioctl`, `fs.read`, `fs.statvfs`, `loader.cpuclock` |
 
-For the real Pyodide (not this host), BACKLOG 8 measured under Node: `pyodide.asm.wasm` declares 557 imports (263 `env`
+For the real Pyodide (not this host), measured under Node on 2026-11-15 (not re-run): `pyodide.asm.wasm` of the release declares 557 imports (263 `env`
 functions, 14 WASI, 280 `GOT.func`), the glue offers 1,383 keys, and booting calls only **49 distinct** imports (2,136
-calls); `print(1+1)` after the boot adds 21 calls. 92 of the 93 real glue functions are generic Emscripten runtime and only
-`_PyEM_TrampolineCall_JS` carries a CPython name. Not measured here: how many of those 49 are the 32 WASI functions above
-and how many the adapter answers on its own.
+calls); `print(1+1)` after the boot adds 21 calls; 2,000 `os.stat` and 2,000 `time.time` make 4,011 calls (`__syscall_stat64` 2,077,
+`clock_time_get` 2,036, `fd_seek` 506, `__syscall_fstat64` 256, `__syscall_openat` 256). Of the audit's 264 entries 171 are Pyodide's JavaScript
+bridge and test hooks by class (149 `js-value`, 9 `js-bridge`, 13 `hook`: stubs on purpose) and 93 are real glue functions (60 `os`, 33
+`runtime`); 92 of those 93 are generic Emscripten runtime and only `_PyEM_TrampolineCall_JS` carries a CPython name (by name and by
+reading, not tested on a second module). Of the 263 `env` functions of the release 59 are `__syscall_*`, 29 Emscripten runtime/JS, 3 for
+dlopen, about 152 for the JavaScript bridge, 4 libffi through JS, 6 network/async helpers, 4 hiwire and 6 libc-like (`getaddrinfo`,
+`getnameinfo`, `getprotobyname`, `__assert_fail`, `exit`, `__call_sighandler`) (by name, approximate). Not measured here: how many of the 49 are the 32 WASI
+functions above and how many the adapter answers on its own.
 
 ## 5. What the host does that is not an import (the thinning backlog)
 
-Sizes: BACKLOG 8 (2026-11-15) gave the host's Python as 3,802 lines (`src/pyodide_nojs/*.py`, 170 KB) against the adapter's
+Sizes, on 2026-11-15: the host's Python was 3,802 lines (`src/pyodide_nojs/*.py`, 170 KB) against the adapter's
 4,183 lines of C (181 KB), the guest-side Python 443 lines; about 2,300 lines of the host are engine/OS primitives and about
 850 are pure logic that could live in the adapter. `wc -l` of 2026-11-16 gives more (the code has grown since): 4,321 lines
 for `src/pyodide_nojs/*.py`, 4,301 for `wasm/adapter.c` and `wasm/adapter/*.h`, 660 for `guest/*`. The line
@@ -229,5 +234,5 @@ time zone, the CPU clocks, `statvfs`, the terminal (`fs.*`), `proc_exit`, and WA
 * No run of the official suite, CI or the `network` tests; only the offline checks named above (the import list of the built wasm, the two counted programs of section 4, `tests/test_host_contract.py`), on Linux.
 * What wasmtime answers for CPU-time clock ids (2 and 3) and for `fd_read` on a terminal stdin was taken from the code's comments, not tested here.
 * "Movable" statements are readings of the code, not prototypes; none was built or measured. Moving anything needs its own brief and a measurement of the ffi call (59 us) and callback (168 us).
-* The numbers of the real Pyodide under Node are BACKLOG 8's and were not re-run.
+* The numbers of the real Pyodide under Node are those of 2026-11-15 and were not re-run.
 * Windows and macOS: `fs.ioctl` (no termios on Windows), `fs.statvfs` (`shutil.disk_usage`) and the zone calls differ there; CI is the only check.

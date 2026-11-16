@@ -2,7 +2,7 @@
 # ruff: noqa
 # fmt: off
 tree()
-# each case in a state of its own (the NEW differences of docs/DIFF_AUDIT_files.md, re-run alone)
+# each case in a state of its own (the differences the files probes found, re-run alone: docs/DIFFERENCES.md)
 case('rmdir emptyd/ (trailing slash)', lambda: os.rmdir(B + '/emptyd/'))
 case('rmtree d/ (trailing slash)', lambda: __import__('shutil').rmtree(B + '/d/'))
 case('rmdir lnd/ ', lambda: os.rmdir(B + '/lnd/'))

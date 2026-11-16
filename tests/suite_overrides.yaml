@@ -29,7 +29,7 @@ test_posixpath:
     reason: >-
       realpath(b'/\xff', strict=ALL_BUT_LAST) must return the path (and strict=True raise FileNotFoundError); WASI paths
       are UTF-8 text, so the host answers EILSEQ for every call with a name that is not (platform limit,
-      docs/DIFF_AUDIT_files.md section 4; Pyodide's MEMFS decodes the bytes to lone surrogates and answers ENOENT). The
+      docs/DIFFERENCES.md; Pyodide's MEMFS decodes the bytes to lone surrogates and answers ENOENT). The
       skip also drops the assertions that follow it in the same test (b'/nonexistent/\xff' with all three strict modes)
 
 test_pathlib.test_pathlib:

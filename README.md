@@ -99,6 +99,8 @@ np.int32(10)
 ```
 `--venv DIR` (API: `Pyodide(venv=DIR)`) is the venv's **root**; it finds the site-packages itself and copies it into the guest at every start (a big venv slows the start: keep only what you need). It checks the venv: a venv of another Python is an error, a package built for another Python or Pyodide is a warning that names it (pure-Python packages work anywhere). Packages with C code (`numpy`) load through the same `dlopen` as in Pyodide.
 
+Instead of the venv's `pip`, `uv` installs into the venv: `uv pip install --python .venv-pyodide/bin/python --no-build --extra-index-url file://<xbuildenv>/pyodide-root/package_index --index-strategy unsafe-best-match numpy` (checked: numpy 2.4.3 installed), where `<xbuildenv>` is `~/.cache/pyodide-build/.pyodide-xbuildenv-<hash>/315.0.0a2/xbuildenv`; the hash is in that folder's name, and a shell glob does not work inside a `file://` URL, so look at `ls ~/.cache/pyodide-build/`. `uv` cannot make the venv itself: its Pyodide interpreters stop at Python 3.14.2 (`uv python list --all-versions --all-platforms | grep -i emscripten`).
+
 ### Without pyodide-build: plain pip
 Wheels for Pyodide's platform that PyPI hosts (PEP 783, tag `pyemscripten_2026_5_wasm32`) install into a folder with pip 26 or newer, on any host Python and with no Node; `--site` then copies the folder into the guest:
 ```sh
@@ -286,7 +288,7 @@ Why tests are skipped or xfail. In Pyodide's own list: 31 `xfail` entries (a who
 Failures that appear are read from the junit files of the CI suite jobs (artifacts `suite-fused`, `suite-dynamic`).
 
 ## Differences from Pyodide and known gaps
-What does not work, and what is deliberately different (the per-import list with the evidence is [docs/IMPORT_AUDIT.md](docs/IMPORT_AUDIT.md)):
+What does not work, and what is deliberately different (the per-import list with the evidence is [docs/IMPORT_AUDIT.md](docs/IMPORT_AUDIT.md); what answers differently from the real Pyodide, open and deliberate, with the test that covers each, and how to run the comparison again, is [docs/DIFFERENCES.md](docs/DIFFERENCES.md)):
 
 * **The JavaScript bridge is absent**: `js`, `pyodide_js`, `pyodide.ffi`, `JsProxy`/`PyProxy`, `loadPackage` from JS and `pyodide.http` outside `hostnet` do not work; the 169 `env` imports are zero/null stubs. Tests that need them are not applicable, not failures. Pyodide's own Python package (`pyodide/`, `_pyodide/`) is in the stdlib zip but the start does not run its JavaScript-side start-up code: 84 modules are loaded at start against Pyodide's 197 (`len(sys.modules)` in this package, `tests/boot_modules.py` for Pyodide's).
 * **Lock entries of `package_type` other than `package`** (the shared libraries `libopenblas`, `libopenssl`, `test-cpp-exceptions`, `test-sharedlib`) raise `NotImplementedError` in `micropip`: they need Pyodide's JavaScript loader.
@@ -352,7 +354,7 @@ src/pyodide_nojs/data/   built wasm and the lock, tls/, py/ (ignored by git; in 
 wasm/                    the adapter: adapter.c and adapter/*.h
 tools/                   the build: fetch, build_data, build_adapter, build_binaryen, build_ssl, prepare_testenv, fuse.py, patch_main.mjs, audit_imports.py
 tests/                   offline, network and the official suite, each on both packagings; suite_overrides.yaml
-docs/                    HOST_CONTRACT.md, IMPORT_AUDIT.md and import_audit.json, and the audits of differences from Pyodide
+docs/                    HOST_CONTRACT.md, IMPORT_AUDIT.md and import_audit.json, DIFFERENCES.md (the differences from Pyodide)
 licenses/                the texts of the licenses of the bundled binaries and NOTICE
 .github/workflows/       build, tests, pre-commit, publish
 package.json             the pinned Pyodide and Binaryen
