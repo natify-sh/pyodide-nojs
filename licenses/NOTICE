@@ -2,17 +2,20 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
 
 * pyodide.asm.wasm, python_stdlib.zip, pyodide_fused.wasm (which contains pyodide.asm.wasm): Pyodide 315.0.0-alpha.2,
   MPL-2.0 (Pyodide-LICENSE-MPL-2.0.txt). Pyodide's CPython is under the PSF license (CPython-LICENSE-PSF.txt); the
-  Emscripten runtime and musl libc compiled into pyodide.asm.wasm are MIT-licensed (Emscripten, musl). The files are
+  Emscripten runtime (6.0.5; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
+  (MIT: musl-COPYRIGHT-MIT.txt) compiled into pyodide.asm.wasm. The files are
   Pyodide's own, with only the legacy wasm exceptions converted to exnref (Binaryen 132); fused is also merged with adapter.wasm.
   Source: https://github.com/pyodide/pyodide (tag 315.0.0a2), https://www.npmjs.com/package/pyodide/v/315.0.0-alpha.2
-  CPython's own bundled third-party libraries are compiled into pyodide.asm.wasm too (symbols of expat, libmpdec, zlib, bzip2,
-  liblzma and SQLite are in the binary); their license texts are those of CPython's "History and License" page
-  (Doc/license.rst of CPython 3.15), and are not copied into licenses/ yet.
+  CPython's own bundled third-party libraries are compiled into pyodide.asm.wasm too (symbols of expat, zlib, bzip2, liblzma,
+  SQLite, Zstandard and libffi are in the binary): their license texts are in CPython-incorporated-software-LICENSES.txt
+  (CPython's Doc/license.rst of 3.15.0rc1, with the expat text inserted, and bzip2 and Zstandard added; SQLite and liblzma
+  are in the public domain and have no text).
 * pyodide-lock.json: the package lock of the same Pyodide release (MPL-2.0, as above; JSON data, unchanged), from the
   release's files (npm `pyodide` 315.0.0-alpha.2, tools/fetch.sh).
 * wasm-opt.wasm: Binaryen version_132 built for wasm32-wasip1 with wasi-sdk 34 (tools/build_binaryen.sh), Apache-2.0
-  (Binaryen-LICENSE-Apache-2.0.txt). It statically contains wasi-libc (MIT / Apache-2.0 with LLVM exceptions / CC0),
-  libc++, libc++abi and libunwind of wasi-sdk (Apache-2.0 with LLVM exceptions).
+  (Binaryen-LICENSE-Apache-2.0.txt). It statically contains wasi-libc (MIT / Apache-2.0 with LLVM exceptions / CC0 /
+  BSD-2-Clause for cloudlibc), libc++, libc++abi and libunwind of wasi-sdk (Apache-2.0 with LLVM exceptions, and the dual
+  MIT / University of Illinois license): the texts are in wasi-sdk-runtime-LICENSES.txt.
   Source: https://github.com/WebAssembly/binaryen (tag version_132), https://github.com/WebAssembly/wasi-sdk (tag wasi-sdk-34)
 * adapter.wasm: built from wasm/adapter.c in this repository (MIT, see LICENSE) with wasi-sdk 34 (-nostdlib: no library is linked in).
 * The Python files of the wheel (pyodide_nojs/ and pyodide_nojs/guest/, which is copied into the guest) are this repository's (MIT).
