@@ -35,3 +35,7 @@ if [ -n "$BG" ]; then wait "$BG"; fi
 WASM_MERGE="node $W/dl/binaryen/package/bin/wasm-merge" PYTHONPATH="$H/src" \
   python3 "$H/tools/fuse.py" "$DATA/pyodide.asm.wasm" "$DATA/adapter.wasm" "$DATA/pyodide_fused.wasm"
 ls -l "$DATA"
+# what this script does not build: the guest's real _ssl (its own step: a different toolchain, about 5 minutes the first time)
+if [ ! -f "$DATA/tls/ssl.py" ]; then
+  echo "build_data.sh: $DATA/tls is missing: the package does not start without it: run  sh tools/build_ssl.sh ${1:-pyo-build}" >&2
+fi
