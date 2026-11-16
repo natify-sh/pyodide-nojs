@@ -34,8 +34,12 @@ _fetch = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_
 _free = ctypes.CFUNCTYPE(None, ctypes.c_void_p)(FREE)
 
 
-def fetch(url, method="GET", headers=None, body=None):
-    """-> (status, reason, [(header, value)], body bytes, final url). Errors of the network are OSError."""
+CHUNK = (
+    1 << 20
+)  # a download is asked for in pieces of this size: the host's call is short, so a Ctrl-C is seen between them
+
+
+def _fetch_once(url, method, headers, body):
     req = json.dumps({"url": url, "method": method, "headers": dict(headers or {})}).encode()
     if isinstance(body, str):
         body = body.encode()
@@ -50,6 +54,55 @@ def fetch(url, method="GET", headers=None, body=None):
     if "error" in meta:
         raise OSError(meta["error"])
     return meta["status"], meta["reason"], meta["headers"], data, meta["url"]
+
+
+def _piece(url, headers):
+    """One piece of a download: a read that timed out is asked for again (twice), so a slow CDN edge costs the
+    piece and not the whole file."""
+    for attempt in range(3):
+        try:
+            return _fetch_once(url, "GET", headers, None)
+        except OSError as e:
+            if "TimeoutError" not in str(e) or attempt == 2:
+                raise
+
+
+def fetch(url, method="GET", headers=None, body=None):
+    """-> (status, reason, [(header, value)], body bytes, final url). Errors of the network are OSError.
+    A plain GET is asked for in pieces (`Range`, 1 MiB) when the server supports it: each host call is short, so
+    Ctrl-C is seen between pieces. A server that answers 200 to the first request is read as it always was."""
+    h = {k.lower(): v for k, v in dict(headers or {}).items()}
+    if method != "GET" or body or "range" in h:
+        return _fetch_once(url, method, headers, body)
+    st, reason, hdrs, data, final = _fetch_once(
+        url, method, {**dict(headers or {}), "Range": f"bytes=0-{CHUNK - 1}"}, None
+    )
+    rng = next((v for k, v in hdrs if k.lower() == "content-range"), "")
+    try:
+        total = int(rng.rsplit("/", 1)[1])
+    except (IndexError, ValueError):
+        total = -1
+    if st != 206 or total < 0:
+        return st, reason, hdrs, data, final
+    etag = next((v for k, v in hdrs if k.lower() == "etag"), None)
+    parts = [data]
+    got = len(data)
+    while got < total:
+        if not parts[-1]:
+            raise OSError(f"{url}: the server sent an empty piece at byte {got} of {total}")
+        more = {**dict(headers or {}), "Range": f"bytes={got}-{min(got + CHUNK, total) - 1}"}
+        if etag:
+            more["If-Range"] = etag
+        st2, _, h2, d2, _ = _piece(url, more)
+        if st2 != 206:
+            raise OSError(
+                f"{url}: the file changed or the server stopped answering ranges (status {st2}) at byte {got}"
+            )
+        parts.append(d2)
+        got += len(d2)
+    skip = {"content-range", "content-length"}
+    hdrs = [(k, v) for k, v in hdrs if k.lower() not in skip] + [("Content-Length", str(total))]
+    return 200, "OK", hdrs, b"".join(parts), final
 
 
 # ---------------------------------------------------------------- pyodide.http.pyfetch

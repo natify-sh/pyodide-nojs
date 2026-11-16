@@ -124,10 +124,13 @@ class Net:
         """As a browser's fetch or wasi:http: request as JSON + body; the answer is two blocks from the main module's
         malloc: JSON meta (status, reason, headers, url) and the body."""
         c = self.guest.cur[-1]
+        what = ""
         try:
             if not self._http:
                 raise PermissionError("the host's fetch is not allowed: start with --http (or --inherit-network)")
             req = json.loads(self.guest.rd(req_p, req_n))
+            rng = {k.lower(): v for k, v in (req.get("headers") or {}).items()}.get("range")
+            what = f"{req.get('method') or 'GET'} {req['url']}" + (f" ({rng})" if rng else "")
             body = self.guest.rd(body_p, body_n) if body_n else None
             r = urllib.request.Request(
                 req["url"], data=body, headers=req.get("headers") or {}, method=req.get("method") or "GET"
@@ -144,10 +147,10 @@ class Net:
             except urllib.error.HTTPError as e:
                 st, reason, hdrs, data, url = e.code, e.reason, list(e.headers.items()), e.read(), e.url
             meta = {"status": st, "reason": str(reason), "headers": hdrs, "url": url}
-            self._netlog.append(f"{req.get('method') or 'GET'} {req['url']} -> {st} ({len(data)} bytes)")
+            self._netlog.append(f"{what} -> {st} ({len(data)} bytes)")
         except Exception as exc:
             meta, data = {"error": f"{type(exc).__name__}: {exc}"}, b""
-            self._netlog.append(f"{req_n} -> {meta['error']}")
+            self._netlog.append(f"{what or 'fetch'} -> {meta['error']}")
         blocks: list[int] = []
         for b in (json.dumps(meta).encode(), data):
             p = self.guest.ex["malloc"](c, max(1, len(b)))
