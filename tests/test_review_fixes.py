@@ -362,7 +362,7 @@ def test_tracebacks_show_only_the_users_frames(guest: Guest) -> None:
         assert r.returncode == 1 and "Error" in r.stderr, r.stderr
         assert "pyodide_nojs" not in r.stderr and "exec(code" not in r.stderr, r.stderr
     r = guest.run("1/0\n")
-    assert re.findall(r'File "[^"]*", line \d+, in <?\w+>?', r.stderr) == ['File "<string>", line 2, in <module>'], (
+    assert re.findall(r'File "[^"]*", line \d+, in <?\w+>?', r.stderr) == ['File "<string>", line 1, in <module>'], (
         r.stderr
     )
 
