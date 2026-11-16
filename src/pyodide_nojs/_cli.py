@@ -243,11 +243,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if ns.verbose:
         logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
-    if (ns.asm_wasm or ns.stdlib) and ns.flavor == "fused":
+    overridden = ns.asm_wasm or ns.stdlib or _engine.env("PYODIDE_NOJS_ASM_WASM") or _engine.env("PYODIDE_NOJS_STDLIB")
+    if overridden and ns.flavor == "fused":
         ap.error(
             "--asm-wasm and --stdlib replace files of the dynamic build: the fused module is built for one Pyodide"
         )
-    flavor = ns.flavor or ("dynamic" if ns.asm_wasm or ns.stdlib else None)
+    flavor = ns.flavor or ("dynamic" if overridden else None)
     for opt, items in (("--mount", ns.mount), ("--env", ns.env)):
         for item in items:
             if "=" not in item:

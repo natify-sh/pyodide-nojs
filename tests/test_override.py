@@ -104,6 +104,8 @@ def test_snapshot_key_follows_the_files_loaded(
     monkeypatch.delenv("PYODIDE_NOJS_SNAPSHOT", raising=False)
     b = tmp_path / "b.asm.wasm"
     shutil.copyfile(asm, b)
+    with open(b, "ab") as f:
+        f.write(b"\0")  # the key follows the content of an override, not its mtime
     touch(asm, 1_000_000_000)
     touch(b, 1_100_000_000)
 
@@ -204,3 +206,97 @@ def test_legacy_exceptions_are_converted_once(tmp_path: Path, monkeypatch: pytes
     done.clear()
     _engine.load_module(legacy, wasm_opt=opt, converted=done)
     assert (calls, done) == ([1], [])
+
+
+def same_size_pair(tmp_path: Path) -> tuple[Path, Path]:
+    """Two files of one size and one mtime, different bytes."""
+    a, b = tmp_path / "a.bin", tmp_path / "b.bin"
+    a.write_bytes(b"x" * 100 + b"1")
+    b.write_bytes(b"x" * 100 + b"2")
+    touch(a, 1_000_000_000)
+    touch(b, 1_000_000_000)
+    return a, b
+
+
+def test_override_keys_follow_the_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """npm gives every file one mtime: a same-size override with other bytes must not reuse the old caches."""
+    a, b = same_size_pair(tmp_path)
+    assert _engine.file_stamp(a) == _engine.file_stamp(b)  # (size and mtime: the package's own files)
+    assert _engine.file_stamp(a, True) != _engine.file_stamp(b, True)
+    monkeypatch.setenv("PYODIDE_NOJS_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("PYODIDE_NOJS_SNAPSHOT", raising=False)
+    za, zb = tmp_path / "a.zip", tmp_path / "b.zip"
+    for z, v in ((za, "1"), (zb, "2")):
+        with zipfile.ZipFile(z, "w") as f:
+            f.writestr("m.py", "V = " + v + "\n")
+    touch(za, 1_000_000_000)
+    touch(zb, 1_000_000_000)
+    assert za.stat().st_size == zb.stat().st_size
+    assert Pyodide("dynamic", stdlib=za)._snapshot_path() != Pyodide("dynamic", stdlib=zb)._snapshot_path()
+    # the machine-code cache: one path, two modules of one size and mtime, the new one runs
+    w = tmp_path / "m.wasm"
+    for name in ("aa", "bb"):
+        w.write_bytes(tiny_wasm([name], b"\0zz"))
+        touch(w, 1_000_000_000)
+        _engine.STATE.pop("modules", None)
+        assert [i.name for i in _engine.load_module(w, content_key=True).imports] == [name]
+    (cwasm,) = (tmp_path / "cache").glob("m.wasm.*.cwasm")
+    assert cwasm.read_bytes().split(b"\n", 1)[0] == _engine.file_stamp(w, True)
+
+
+def test_cache_write_survives_a_stale_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYODIDE_NOJS_CACHE", str(tmp_path / "cache"))
+    w = tmp_path / "m.wasm"
+    w.write_bytes(tiny_wasm([], b"\0zz"))
+    cached = _engine.cache_dir() / (
+        "m.wasm." + __import__("hashlib").sha1(str(w.resolve()).encode()).hexdigest()[:10] + ".cwasm"
+    )
+    _engine.private_dir(cached.parent)
+    cached.with_suffix(f".tmp{os.getpid()}").write_bytes(b"stale")  # left by a killed run with this pid
+    _engine.STATE.pop("modules", None)
+    _engine.load_module(w)
+    assert cached.exists() and list(cached.parent.glob("*.tmp*")) == []
+
+
+def test_override_path_is_absolute(asm: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(asm.parent)
+    py = Pyodide(asm_wasm=asm.name)
+    monkeypatch.chdir(tmp_path.parent)
+    assert py.asm_wasm == asm.resolve()
+    with py:
+        assert py.run("print(1)") == 0
+
+
+def test_bad_wasm_and_unreadable_file_are_named(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.wasm"
+    bad.write_bytes(b"\0asm\1\0\0\0\2\x7f\5")  # an import section that stops short
+    warn, _ = override_warnings(bad, None, data_dir())
+    assert f"{bad} is not a valid wasm module" in "\n".join(warn)
+    bad.write_bytes(b"\0asm\1\0\0\0\2\4\1\1\xff\xfe")  # a name that is not UTF-8
+    assert "not a valid wasm module" in "\n".join(override_warnings(bad, None, data_dir())[0])
+    gone = tmp_path / "gone.wasm"
+    warn, _ = override_warnings(gone, None, data_dir())
+    assert f"{gone} cannot be read" in warn[0] and "is for Python" not in warn[0]
+    warn, _ = override_warnings(None, gone, data_dir())
+    assert warn == [f"{gone} cannot be read: No such file or directory"]
+
+
+def test_env_override_with_flavor_flag_is_a_clean_error(asm: Path, monkeypatch: pytest.MonkeyPatch, capfd) -> None:
+    monkeypatch.setenv("PYODIDE_NOJS_ASM_WASM", str(asm))
+    with pytest.raises(SystemExit) as e:
+        main(["--flavor", "fused", "-c", "pass"])
+    assert e.value.code == 2 and "fused module is built for one Pyodide" in capfd.readouterr().err
+    monkeypatch.setenv("PYODIDE_NOJS_FLAVOR", "fused")  # an override implies dynamic, as the README says
+    assert Pyodide().flavor == "dynamic"
+
+
+def test_arm_signals_checks_the_guest_words() -> None:
+    from types import SimpleNamespace
+
+    py = object.__new__(Pyodide)
+    for flag, cell in ((10**9, 100), (-1, 100), (5, 10**9), (5, (1 << 20) - 4), (1 << 20, 100)):
+        py.guest = SimpleNamespace(store=None, memory=SimpleNamespace(data_len=lambda s: 1 << 20))  # type: ignore[assignment]
+        py._svc_ex = {"__nojs_sigcell_addr": lambda s, c=cell: c}  # type: ignore[assignment]
+        py.instances = [{"exports": {"Py_EMSCRIPTEN_SIGNAL_HANDLING": SimpleNamespace(value=lambda s, f=flag: f)}}]  # type: ignore[assignment]
+        with pytest.raises(RuntimeError, match="outside its memory"):
+            py._arm_signals()

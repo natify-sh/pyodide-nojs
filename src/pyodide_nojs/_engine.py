@@ -160,11 +160,15 @@ def engine() -> Any:
     return STATE["engine"]
 
 
-def file_stamp(path: Path) -> bytes:
+def file_stamp(path: Path, content: bool = False) -> bytes:
+    """What keys the caches for PATH: size and mtime for the package's own files; for a file the user supplies
+    (CONTENT) a digest of its bytes, because npm and other installers give every file one mtime."""
     try:
         wt_version = version("wasmtime")
     except PackageNotFoundError:  # pragma: no cover
         wt_version = "?"
+    if content:
+        return f"wasmtime-py {wt_version}:sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}".encode()
     st = path.stat()
     return f"wasmtime-py {wt_version}:{st.st_size}:{st.st_mtime_ns}".encode()
 
@@ -173,15 +177,17 @@ def load_module(
     path: str | os.PathLike[str],
     *,
     cache: bool = True,
+    content_key: bool = False,
     wasm_opt: str | os.PathLike[str] | None = None,
     converted: list[Path] | None = None,
 ) -> Any:
     """Compile a module from a file, through the machine-code cache. With WASM_OPT, a file refused for its legacy
     exceptions is converted to exnref (and PATH appended to CONVERTED); the cache then holds the converted module,
-    keyed by the source file's stamp, so the conversion runs once per file."""
+    keyed by the source file's stamp, so the conversion runs once per file. CONTENT_KEY: the stamp is a digest of the
+    file's bytes (a file the user supplies), not its size and mtime."""
     wt = require_wasmtime()
     path = Path(path).resolve()
-    stamp = file_stamp(path)
+    stamp = file_stamp(path, content_key)
     key = (str(path), stamp)
     modules: dict = STATE.setdefault("modules", {})
     if key in modules:
@@ -213,9 +219,13 @@ def load_module(
             try:
                 private_dir(cached.parent)
                 tmp = cached.with_suffix(f".tmp{os.getpid()}")
-                with open_private(tmp) as f:
-                    f.write(stamp + b"\n" + module.serialize())
-                os.replace(tmp, cached)
+                tmp.unlink(missing_ok=True)  # a stale one of a killed run with this pid
+                try:
+                    with open_private(tmp) as f:
+                        f.write(stamp + b"\n" + module.serialize())
+                    os.replace(tmp, cached)
+                finally:
+                    tmp.unlink(missing_ok=True)
             except OSError:
                 pass
     modules[key] = module

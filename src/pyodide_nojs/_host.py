@@ -132,9 +132,12 @@ class Pyodide:
         overridden = self.asm_wasm is not None or self.stdlib is not None
         if self.asm_wasm is not None and "dynamic" not in have and (self.data / "adapter.wasm").exists():
             have.append("dynamic")  # the adapter is the package's, the main module is the given one
-        if flavor is None:
-            flavor = _engine.env("PYODIDE_NOJS_FLAVOR") or (
-                "dynamic" if overridden or "dynamic" in have else (have[0] if have else "dynamic")
+        if flavor is None:  # an override implies dynamic, whatever $PYODIDE_NOJS_FLAVOR says (as the README states)
+            flavor = (
+                "dynamic"
+                if overridden
+                else _engine.env("PYODIDE_NOJS_FLAVOR")
+                or ("dynamic" if "dynamic" in have else (have[0] if have else "dynamic"))
             )
         if flavor == "fused" and overridden:
             raise ValueError(
@@ -751,6 +754,9 @@ class Pyodide:
         if not cell:
             raise RuntimeError("the guest is out of memory: no word for the signal")
         flag = self.instances[0]["exports"]["Py_EMSCRIPTEN_SIGNAL_HANDLING"].value(store)
+        size = self.guest.memory.data_len(store)
+        if not (0 <= flag < size and 0 < cell and cell + 8 <= size):  # both come from the guest: a foreign main module
+            raise RuntimeError(f"the guest's signal words are outside its memory ({flag=}, {cell=}, {size=})")
         base = ctypes.addressof(self.guest.memory.data_ptr(store).contents) if _engine.STATE["stable_memory"] else None
         with self._sig_lock:
             self._sig = (base, cell, flag)
@@ -999,7 +1005,12 @@ class Pyodide:
             ]
             fwd = {n: k for k, n in enumerate([*adapter_names, _wasm.TRAMP])}
             done: list[Path] = []
-            main_mod = _engine.load_module(main_path, wasm_opt=self.wasm_opt if self.asm_wasm else None, converted=done)
+            main_mod = _engine.load_module(
+                main_path,
+                content_key=self.asm_wasm is not None,
+                wasm_opt=self.wasm_opt if self.asm_wasm else None,
+                converted=done,
+            )
             if done:
                 log.warning("pyodide-nojs: %s: converted from legacy exceptions at start; cached", main_path)
             imports = _wasm.func_imports(main_mod)
@@ -1103,6 +1114,7 @@ class Pyodide:
 
     # ------------------------------------------------------------------ snapshot of the memory after `preload`
     def _snapshot_path(self) -> Path:
+        mine = [p for p in (self.stdlib, self.asm_wasm) if p is not None]  # the user's: keyed by content
         files = [
             self.stdlib or self.data / "python_stdlib.zip",
             *(
@@ -1123,7 +1135,7 @@ class Pyodide:
                 [
                     SNAPSHOT_VERSION,
                     self.flavor,
-                    [_engine.file_stamp(f.resolve()).decode() for f in files],
+                    [_engine.file_stamp(f.resolve(), f in mine).decode() for f in files],
                     PYVER,
                     self.preload,
                     code_hash(Path(__file__).resolve().parent),

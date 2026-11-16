@@ -210,7 +210,7 @@ def override_path(path: str | os.PathLike[str] | None, var: str) -> Path | None:
         return None
     if not Path(p).is_file():
         raise FileNotFoundError(f"no such file: {p}" + ("" if path else f" (from ${var})"))
-    return Path(p)
+    return Path(p).resolve()  # read later (the first run, a snapshot's fresh interpreter): a chdir must not move it
 
 
 def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tuple[list[str], list[str]]:
@@ -219,14 +219,21 @@ def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tupl
     warn: list[str] = []
     detail: list[str] = []
     if asm is not None:
-        b = asm.read_bytes()
+        try:
+            b = asm.read_bytes()
+        except OSError as exc:
+            return [f"{asm} cannot be read: {exc.strerror or exc}"], []
         seen = sorted({m.decode() for m in re.findall(rb"\x00(3\.\d+\.\d+(?:[abc]|rc)?\d*)\x00", b)})
         if PYVER_FULL not in seen:
             warn.append(
                 f"{asm} does not carry CPython {PYVER_FULL} (the pinned Pyodide's); its version strings: "
                 f"{', '.join(seen) or 'none found'} (only CPython's version is compared: Pyodide's is not in the wasm)"
             )
-        imps = {n for m, n, k in _wasm.import_names(b) if k == 0 and m == "env"}
+        try:
+            imps = {n for m, n, k in _wasm.import_names(b) if k == 0 and m == "env"}
+        except (IndexError, UnicodeDecodeError, ValueError):
+            warn.append(f"{asm} is not a valid wasm module (its import section cannot be read)")
+            return warn, detail
         adapter, known = data / "adapter.wasm", data / "pyodide.asm.wasm"
         if adapter.exists() and known.exists():  # answered: by the adapter, or audited as a stub in the pinned build
             names = {n for m, n, k in _wasm.import_names(known.read_bytes()) if m == "env"}
@@ -245,7 +252,10 @@ def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tupl
                 cfg = next(n for n in z.namelist() if re.fullmatch(r"_sysconfigdata_[^/]*\.py", n))
                 ver = re.search(r"'VERSION': '([^']*)'", z.read(cfg).decode())
             found = ver.group(1) if ver else "?"
-        except (OSError, StopIteration, zipfile.BadZipFile):
+        except OSError as exc:
+            warn.append(f"{stdlib} cannot be read: {exc.strerror or exc}")
+            found = PYVER
+        except (StopIteration, zipfile.BadZipFile):
             found = "?"
         if found != PYVER:
             warn.append(
