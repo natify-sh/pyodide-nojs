@@ -94,6 +94,13 @@ in `wasm/adapter/common.h` (`LOADER`, `FS`, `aux`) and `wasm/adapter/sockets.h` 
 
 ### 3.2 `net`: 19 imports (the host's sockets and DNS)
 
+Policy (`Net`, set by `--tcp`/`--udp`/`--dns`/`--http`/`--inherit-network`, all off by default): `net.socket` is gated at
+creation (TCP needs `tcp`, UDP needs `udp`; denied: `-EACCES`), so the other socket operations (`bind`, `listen`,
+`accept`, `connect`, `sendto`, `recvfrom`, `sendmsg`, `recvmsg`, `poll`, `pollv`, `close`, `shutdown`, `name`, `getopt`,
+`setopt`, `ioctl`) act only on handles that exist and need no gate. `net.getaddrinfo` and `net.getnameinfo` need `dns`
+unless the node is a numeric address (`NI_NUMERICHOST` for the reverse one); denied: `EAI_FAIL`. The host's `fetch`
+(not an import of `net`) needs `http`.
+
 All of `net.*` are OS facts: a wasm module cannot create, connect, bind or poll a socket, and WASI preview1 has no socket
 creation or connect (only the adapter's descriptor layer makes them look like files). The adapter keeps the guest's
 descriptor numbers, flags (`O_NONBLOCK`, `MSG_DONTWAIT`) and the table that dups share; the host owns a handle per socket.

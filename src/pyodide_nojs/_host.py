@@ -101,8 +101,12 @@ class Pyodide:
     ``env``: more environment variables.
     The guest is isolated: its environment is Pyodide's minimal one (``BASE_ENV``) plus ``env``, never the host's,
     unless ``inherit_env`` passes the host's variables too, secrets included (``env`` wins; no snapshot then).
-    The guest's ``/`` is a temporary folder (stdlib zip, site-packages); it is not a sandbox against the host's own
-    network: ``socket`` and the host's fetch are real.
+    The guest's ``/`` is a temporary folder (stdlib zip, site-packages). The network is OFF by default and the flags
+    (wasmtime's ``-S`` model) switch the host's world on: ``tcp`` / ``udp`` (sockets of that type; ``socketpair()``
+    and asyncio's default loop are TCP over the host's loopback, so they need ``tcp``), ``dns`` (name lookup; numeric
+    addresses always resolve), ``http`` (the host's fetch, used by ``hostnet``), ``inherit_network`` (all of them).
+    A denied socket is ``PermissionError`` (EACCES), a denied lookup ``gaierror`` EAI_FAIL, a denied fetch an
+    ``OSError`` that names the flag.
 
     ``preload``: Python source run once at start (as ``run(preload)``). The memory after it is cached in a snapshot file
     in the cache dir, so a next start with the same preload and settings restores it instead of booting Python
@@ -125,6 +129,11 @@ class Pyodide:
         preload: str | None = None,
         asm_wasm: str | os.PathLike[str] | None = None,
         stdlib: str | os.PathLike[str] | None = None,
+        inherit_network: bool = False,
+        tcp: bool = False,
+        udp: bool = False,
+        dns: bool = False,
+        http: bool = False,
     ) -> None:
         wt = _engine.require_wasmtime()
         self._wt = wt
@@ -186,7 +195,13 @@ class Pyodide:
         self._wasi_linker: Any = None  # wasmtime's WASI functions, for the side modules that import them
         self._dlreason = ""  # why the last instantiate failed
         self.guest = Guest()  # the store, the main module's exports, memory, table and the call contexts
-        self.net = Net(self.guest)  # the host's sockets and fetch: it owns them
+        self.net = Net(
+            self.guest,
+            tcp=tcp or inherit_network,
+            udp=udp or inherit_network,
+            dns=dns or inherit_network,
+            http=http or inherit_network,
+        )  # the host's sockets and fetch: it owns them
         self.lazy: list[str] = []
         self.converted = 0  # modules whose legacy exceptions the loader converted at dlopen
         self.summary = ""

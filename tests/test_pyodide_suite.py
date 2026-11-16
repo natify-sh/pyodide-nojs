@@ -170,6 +170,7 @@ def test_cpython_core(suite_flavor: str, module: tuple[str, dict[str, Any]], rec
         "pyodide_nojs",
         "--flavor",
         suite_flavor,
+        "--inherit-network",  # CPython's test_socket, test_urllib, test_ssl... need the host's sockets
         "--site",
         str(t / "suite_ext"),
         "--mount",

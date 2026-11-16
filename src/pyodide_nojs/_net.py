@@ -40,6 +40,14 @@ from ._sockaddr import (
 log = logging.getLogger("pyodide_nojs")
 
 
+def _numeric_host(node: str) -> bool:
+    try:
+        socket.getaddrinfo(node, None, 0, 0, 0, socket.AI_NUMERICHOST)
+    except (socket.gaierror, UnicodeError):
+        return False
+    return True
+
+
 class _StdStream:
     """A standard stream (a terminal) of the host's process as `_poll` sees a socket: a `fileno()` and nothing else."""
 
@@ -50,9 +58,19 @@ class _StdStream:
         return self._fd
 
 
+EACCES = GUEST_ERRNO["ACCES"]
+EAI_FAIL = -4
+
+
 class Net:
-    def __init__(self, guest: Guest) -> None:
+    """What the guest may reach is decided by four capabilities (wasmtime's `-S` flags): `tcp` and `udp` (the sockets of
+    that type, gated at creation: no handle exists without it. The guest has no AF_UNIX, so `socketpair()` and
+    asyncio's default loop are TCP over the host's 127.0.0.1 and need `tcp`), `dns` (name lookup; numeric
+    addresses always resolve), `http` (the host's fetch). All off by default."""
+
+    def __init__(self, guest: Guest, *, tcp: bool = False, udp: bool = False, dns: bool = False, http: bool = False):
         self.guest = guest
+        self._tcp, self._udp, self._dns, self._http = tcp, udp, dns, http
         self._socks: dict = {}  # handle -> the host's socket
         self._netlog: list[str] = []  # what the verbose log says of the host's network, until flush_log
         self._shut_both: weakref.WeakSet[socket.socket] = weakref.WeakSet()  # shutdown(RDWR) was called: poll's HUP
@@ -106,6 +124,8 @@ class Net:
         malloc: JSON meta (status, reason, headers, url) and the body."""
         c = self.guest.cur[-1]
         try:
+            if not self._http:
+                raise PermissionError("the host's fetch is not allowed: start with --http (or --inherit-network)")
             req = json.loads(self.guest.rd(req_p, req_n))
             body = self.guest.rd(body_p, body_n) if body_n else None
             r = urllib.request.Request(
@@ -147,6 +167,9 @@ class Net:
             return -ESOCKTNOSUPPORT
         if proto not in (0, 6 if type_ == 1 else 17):
             return -GUEST_ERRNO["PROTONOSUPPORT"]
+        if not (self._tcp if type_ == 1 else self._udp):  # the capability is exercised here: no handle, no network
+            self._netlog.append(f"socket denied (needs --{'tcp' if type_ == 1 else 'udp'} or --inherit-network)")
+            return -EACCES
         try:
             s = socket.socket(
                 socket.AF_INET if domain == 2 else socket.AF_INET6,
@@ -471,6 +494,8 @@ class Net:
         flags = family = type_ = proto = 0
         if hint_p:
             flags, family, type_, proto = struct.unpack("<4i", self.guest.rd(hint_p, 16))
+        if not self._dns and node is not None and not _numeric_host(node):
+            return EAI_FAIL  # a name needs a lookup (--dns); a literal address does not
         found = resolve_addrinfo(node, service, flags, family, type_, proto)
         if isinstance(found, int):
             return found
@@ -498,6 +523,8 @@ class Net:
 
     def _n_getnameinfo(self, sa: int, salen: int, node: int, nodelen: int, serv: int, servlen: int, flags: int) -> int:
         raw = self.guest.rd(sa, min(salen, 28)) if sa and salen >= 2 else b""
+        if not self._dns and not flags & 1:  # NI_NUMERICHOST asks for no lookup
+            return EAI_FAIL
         found = nameinfo(raw, flags)
         if isinstance(found, int):
             return found

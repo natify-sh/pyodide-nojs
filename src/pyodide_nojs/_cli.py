@@ -219,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         help="pass ALL the host's environment variables, secrets included, to the guest (it can print or send them); "
         "by default it has Pyodide's minimal environment",
     )
+    net = ap.add_argument_group("network", "off by default: the guest reaches the host's network only through these")
+    net.add_argument("--inherit-network", action="store_true", help="all of --tcp --udp --dns --http")
+    net.add_argument("--tcp", action="store_true", help="TCP sockets (client and server)")
+    net.add_argument("--udp", action="store_true", help="UDP sockets")
+    net.add_argument("--dns", action="store_true", help="name lookup (numeric addresses always work)")
+    net.add_argument("--http", action="store_true", help="the host's fetch (hostnet.install(), micropip)")
     ap.add_argument("--data", metavar="DIR", help="the wasm files (default: the package's, or $PYODIDE_NOJS_DATA)")
     ap.add_argument(
         "--asm-wasm",
@@ -284,6 +290,11 @@ def main(argv: list[str] | None = None) -> int:
         preload=preload,
         asm_wasm=ns.asm_wasm,
         stdlib=ns.stdlib,
+        inherit_network=ns.inherit_network,
+        tcp=ns.tcp,
+        udp=ns.udp,
+        dns=ns.dns,
+        http=ns.http,
     ) as py:
         call = guest_caller(py)
         call(py.run, "pass")  # the start (it can be long): a Ctrl-C during it is delivered to the program that follows

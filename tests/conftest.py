@@ -48,9 +48,12 @@ class Guest:
         self.flavor = flavor
 
     def run(
-        self, code: str, site: str | None = None, *args: str, timeout: int = 1800
+        self, code: str, site: str | None = None, *args: str, timeout: int = 1800, network: bool = True
     ) -> subprocess.CompletedProcess[str]:
+        """``network=False``: the guest as it is by default (isolated); else --inherit-network."""
         cmd = [sys.executable, "-m", "pyodide_nojs", "--flavor", self.flavor, "-v"]
+        if network:
+            cmd.append("--inherit-network")
         if site:
             path = testenv() / site
             if not path.is_dir():

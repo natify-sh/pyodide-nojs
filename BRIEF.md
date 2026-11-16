@@ -13,7 +13,7 @@ package's, with the legacy wasm exceptions converted once to `exnref`. The packa
 
 * **Not Pyodide's JavaScript API.** `js`, `pyodide.ffi`, `JsProxy`/`PyProxy`, `loadPackage` from JS need the bridge; the 169 `env` imports that are the bridge (158) and hooks without meaning here (11) are zero/null stubs, listed one by one in `docs/IMPORT_AUDIT.md`. Tests that need them are N/A, not failures.
 * **Not a rebuild of Pyodide or of Emscripten.** The one change to Pyodide's binary is made at build time (`tools/patch_main.mjs`): libc's `setsockopt`, which Emscripten compiles to `return 0` without calling the syscall, becomes a call of an import the adapter answers; each such stub needs its own patch. One Pyodide build is supported (`PYODIDE_VERSION` 315.0.0-alpha.2, ABI `pyemscripten_2026_5_wasm32`); the adapter answers that build's imports.
-* **Not a sandbox against the host.** The guest's `/` is a temporary folder, but the host's sockets and fetch are real; `mounts` hand host folders over.
+* **Not a sandbox against the host's kernel.** The guest's `/` is a temporary folder; the network is off by default and `--inherit-network` (or `--tcp`, `--udp`, `--dns`, `--http`; the owner, 2026-11-16) hands the host's sockets, name lookup and fetch over; `mounts` hand host folders over.
 * **Not a Node or a Binaryen user at run time.** Node and npm's Binaryen are **build** tools (`tools/*.sh`, CI). The run time needs wasmtime-py and the wasm files in the wheel.
 * **Not a Component Model component (for now).** Emscripten's ABI does not fit it: a wheel's `.so` imports the main module's memory, table, stack pointer, exception tag and `GOT.*` globals, which cannot cross component instances; the `env`
   imports are Emscripten's JavaScript glue, not WIT; and `dlopen` needs a new core module at run time, which a component cannot create. So Fastly Compute, Spin and wasmCloud, which run components, are not targets. Stock CPython for WASI
@@ -59,7 +59,7 @@ tests/              offline + network + Pyodide's official CPython suite, each o
 * The package has **no run-time Python dependency**; wasmtime-py is the `[wasmtime]` extra (and a dev dependency). Python 3.10+.
 * **Node is a build tool only**; one toolchain, **wasi-sdk 34's clang**, builds every wasm we build.
 * **Both packagings** (fused, dynamic) are tested everywhere a test runs, **including Pyodide's official suite**.
-* **The guest is isolated** from the host's environment and files (D13), with two named exceptions: `--inherit-env` hands over ALL the host's variables, secrets included (and then no snapshot is written), and the CA bundle for TLS is read from the host (`SSL_CERT_FILE`, Python's, the system's: a file with a private key in it would put the key into the guest's `/etc/ssl/cert.pem`; the CA bundle is still open under D13).
+* **The guest is isolated** from the host's environment, files and (by default) network (D13), with two named exceptions: `--inherit-env` hands over ALL the host's variables, secrets included (and then no snapshot is written), and the CA bundle for TLS is read from the host (`SSL_CERT_FILE`, Python's, the system's: a file with a private key in it would put the key into the guest's `/etc/ssl/cert.pem`; the CA bundle is still open under D13).
 * Measure, do not guess: a claim about what runs has a command or a CI run behind it; say plainly what was not run (a network check in a sandbox, Windows, macOS).
 
 ## Map of the documents
