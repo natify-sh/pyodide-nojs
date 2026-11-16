@@ -114,3 +114,38 @@ hostnet.install()
         assert py.run(flaky + PROG.format(url=url)) == 0
     assert capfd.readouterr().out.split() == [str(SIZE), hashlib.sha256(BODY).hexdigest()]
     assert seen.count("bytes=1048576-2097151") == 1  # the failed try never reached the server: one request for it
+
+
+def test_a_503_from_the_server_is_asked_for_again(flavor: str, server, capfd) -> None:
+    url, seen, _, _ = server
+    flaky = """\
+import hostnet
+real, fails = hostnet._fetch_once, []
+def once(url, method, headers, body):
+    if not fails:
+        fails.append(1)
+        return 503, "Service Unavailable", [], b"", url
+    return real(url, method, headers, body)
+hostnet._fetch_once = once
+hostnet.install()
+"""
+    with Pyodide(flavor, inherit_network=True) as py:
+        assert py.run(flaky + PROG.format(url=url)) == 0
+    assert capfd.readouterr().out.split() == [str(SIZE), hashlib.sha256(BODY).hexdigest()]
+
+
+def test_an_await_in_the_repl_leaves_no_unclosed_loop(flavor: str, capfd) -> None:
+    prog = """\
+import asyncio, gc, warnings, hostnet
+async def f():
+    await asyncio.sleep(0)
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter("always")
+    hostnet.run(f())
+    hostnet.run(f())
+    gc.collect()
+print("warnings", [str(x.message) for x in w])
+"""
+    with Pyodide(flavor) as py:
+        assert py.run(prog) == 0
+    assert capfd.readouterr().out.strip() == "warnings []"

@@ -57,10 +57,12 @@ import sys
 try:
     _more = _console.push({line!r})
 except SystemExit:
-    open("/_repl", "w").write("exit")
+    with open("/_repl", "w") as _f:
+        _f.write("exit")
     raise
 sys.stdout.flush()
-open("/_repl", "w").write("more" if _more else "done")
+with open("/_repl", "w") as _f:
+    _f.write("more" if _more else "done")
 """
 
 

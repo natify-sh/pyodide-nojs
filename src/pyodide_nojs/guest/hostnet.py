@@ -57,14 +57,18 @@ def _fetch_once(url, method, headers, body):
 
 
 def _piece(url, headers):
-    """One piece of a download: a read that timed out is asked for again (twice), so a slow CDN edge costs the
-    piece and not the whole file."""
+    """One piece of a download. A read that timed out, or a 502/503/504 (a CDN edge that is not ready), is asked for
+    again (twice, after 0.5 s and 1 s), so a slow or cold edge costs the piece and not the whole file."""
     for attempt in range(3):
         try:
-            return _fetch_once(url, "GET", headers, None)
+            r = _fetch_once(url, "GET", headers, None)
         except OSError as e:
             if "TimeoutError" not in str(e) or attempt == 2:
                 raise
+        else:
+            if r[0] not in (502, 503, 504) or attempt == 2:
+                return r
+        time.sleep(0.5 * 2**attempt)
 
 
 def fetch(url, method="GET", headers=None, body=None):
@@ -74,9 +78,7 @@ def fetch(url, method="GET", headers=None, body=None):
     h = {k.lower(): v for k, v in dict(headers or {}).items()}
     if method != "GET" or body or "range" in h:
         return _fetch_once(url, method, headers, body)
-    st, reason, hdrs, data, final = _fetch_once(
-        url, method, {**dict(headers or {}), "Range": f"bytes=0-{CHUNK - 1}"}, None
-    )
+    st, reason, hdrs, data, final = _piece(url, {**dict(headers or {}), "Range": f"bytes=0-{CHUNK - 1}"})
     rng = next((v for k, v in hdrs if k.lower() == "content-range"), "")
     try:
         total = int(rng.rsplit("/", 1)[1])
@@ -190,6 +192,7 @@ def run(coro):
         return loop.run_until_complete(coro)
     finally:
         asyncio.set_event_loop(None)
+        loop.close()  # one loop per await: an unclosed one is a ResourceWarning
 
 
 # ---------------------------------------------------------------- urllib3 (and so requests)
