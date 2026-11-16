@@ -1,4 +1,5 @@
-// Emscripten_log: _emscripten_log_formatted / emscripten_log_impl_js. Included only by adapter.c.
+// Emscripten_log: _emscripten_log_formatted / emscripten_log_impl_js, and the console functions of the glue's library
+// (emscripten_console_log/warn/error/trace, emscripten_out/err). Included only by adapter.c.
 #ifndef ADAPTER_LOG_H
 #define ADAPTER_LOG_H
 
@@ -35,5 +36,15 @@ EXPORT("_emscripten_log_formatted") void log_formatted(i32 flags, const char *s)
         while (n > 0 && (s[n - 1] == ' ' || (s[n - 1] >= 9 && s[n - 1] <= 13))) n--;
     log_line((flags & 6) ? 2 : 1, s, n);
 }
+
+// The glue's console functions: console.log and `out` print a line to stdout, console.warn / error / trace and `err` to
+// stderr (Node; measured with ctypes on Pyodide 315.0.0a2: no text is added, the line gets one newline, "" is an empty
+// line). console.trace's stack is JavaScript's: the message is printed without it, as for emscripten_log's stacks.
+EXPORT("emscripten_console_log") void console_log(const char *s) { log_line(1, s, slen(s)); }
+EXPORT("emscripten_console_warn") void console_warn(const char *s) { log_line(2, s, slen(s)); }
+EXPORT("emscripten_console_error") void console_error(const char *s) { log_line(2, s, slen(s)); }
+EXPORT("emscripten_console_trace") void console_trace(const char *s) { log_line(2, s, slen(s)); }
+EXPORT("emscripten_out") void out_line(const char *s) { log_line(1, s, slen(s)); }
+EXPORT("emscripten_err") void err_line(const char *s) { log_line(2, s, slen(s)); }
 
 #endif

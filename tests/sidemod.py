@@ -59,6 +59,8 @@ def lib_parts(
     *,
     fn: str = "val",
     env_calls: tuple[str, ...] = (),
+    str_env: tuple[str, ...] = (),
+    str_got: tuple[str, ...] = (),
     got_funcs: tuple[str, ...] = (),
     got_mems: tuple[str, ...] = (),
     data: tuple[str, ...] = (),
@@ -68,7 +70,9 @@ def lib_parts(
 ) -> tuple[bytes, dict[str, int]]:
     """A side module: exports `fn()` -> value (one table slot, `fptr()` gives its number, the pointer C would take),
     `call_<f>()` for each `env_calls` (an `env` function import f() -> i32), `got_<g>()` for each GOT.func /
-    GOT.mem import (the number the loader put in its GOT global), a data symbol for each name in `data` (an exported
+    GOT.mem import (the number the loader put in its GOT global), `str_env_<f>(s)` for each `str_env` (an `env`
+    function import f(char *) -> void) and `str_got_<f>(s)` for each `str_got` (the same function called through its
+    GOT.func slot), a data symbol for each name in `data` (an exported
     global, an offset into the module's memory), and with `callbacks` `on_ok(ud, handle)`, `on_err(ud)` and
     `peek(i)` for the tests of emscripten_dlopen. `garbage` bytes of memory beyond what is used."""
     w = [
@@ -83,12 +87,23 @@ def lib_parts(
         w.append('  (import "wasi_snapshot_preview1" "random_get" (func $random_get (param i32 i32) (result i32)))')
     for f in env_calls:
         w.append(f'  (import "env" "{f}" (func $e_{f} (result i32)))')
+    for f in str_env:
+        w.append(f'  (import "env" "{f}" (func $s_{f} (param i32)))')
+    for g in str_got:
+        w.append(f'  (import "GOT.func" "{g}" (global $sg_{g} (mut i32)))')
     for g in got_funcs:
         w.append(f'  (import "GOT.func" "{g}" (global $gf_{g} (mut i32)))')
     for g in got_mems:
         w.append(f'  (import "GOT.mem" "{g}" (global $gm_{g} (mut i32)))')
     for f in env_calls:
         w.append(f'  (func (export "call_{f}") (result i32) (call $e_{f}))')
+    for f in str_env:
+        w.append(f'  (func (export "str_env_{f}") (param i32) (call $s_{f} (local.get 0)))')
+    for g in str_got:
+        w.append(
+            f'  (func (export "str_got_{g}") (param i32)'
+            f" (call_indirect (param i32) (local.get 0) (global.get $sg_{g})))"
+        )
     for g in got_funcs:
         w.append(f'  (func (export "got_{g}") (result i32) (global.get $gf_{g}))')
     for g in got_mems:

@@ -962,3 +962,48 @@ print(ctypes.CDLL("/g/d.so").call_val(), ctypes.CDLL(None).val())
 """,
     )
     assert out == ["2 2"]
+
+
+CONSOLE_FUNCS = (
+    ("emscripten_console_log", 1),
+    ("emscripten_console_warn", 2),
+    ("emscripten_console_error", 2),
+    ("emscripten_console_trace", 2),
+    ("emscripten_out", 1),
+    ("emscripten_err", 2),
+)
+
+
+def test_the_console_functions_print_a_line_as_node_does(guest: Guest):
+    names = tuple(n for n, _ in CONSOLE_FUNCS)
+    files = {
+        "/c/env.so": sidemod.lib(1, str_env=names),
+        "/c/got.so": sidemod.lib(1, str_got=names),
+    }
+    p = run(
+        guest,
+        files,
+        f"""
+names = {names!r}
+for mode, path in (("env", "/c/env.so"), ("got", "/c/got.so")):
+    lib = ctypes.CDLL(path)
+    for n in names:
+        f = getattr(lib, "str_%s_%s" % (mode, n))
+        f.argtypes = [ctypes.c_char_p]
+        f.restype = None
+        f(("T:%s:%s" % (mode, n)).encode())
+        f(("T:%s:%s trailing  " % (mode, n)).encode())
+        f(b"")
+print("done", flush=True)
+""",
+    )
+    assert p.returncode == 0, p.stderr[-3000:]
+    assert p.stdout.splitlines()[-1] == "done"
+    for stream, text in ((1, p.stdout), (2, p.stderr)):
+        want = []
+        for mode in ("env", "got"):
+            for n, fd in CONSOLE_FUNCS:
+                if fd == stream:  # an empty string is an empty line, as console.log("") prints it
+                    want += [f"T:{mode}:{n}", f"T:{mode}:{n} trailing  ", ""]
+        got = [x for x in text.splitlines() if x.startswith("T:") or x == ""]
+        assert got == want, (stream, got)

@@ -40,6 +40,7 @@ def valtype(b, i):
     raise ValueError(f"value type 0x{c:02x}")
 
 
+GOT_PREFIX = "got$"
 FLAGS = ["--all-features", "--disable-compact-imports"]
 
 
@@ -53,8 +54,8 @@ def leb(n):
             return bytes(out)
 
 
-def rename_imports(b, renames):
-    """Rewrite the module names of imports: renames maps (module, name) -> new module."""
+def rename_imports(b, renames, names=None):
+    """Rewrite the module names of imports: renames maps (module, name) -> new module; names (module, name) -> new name."""
     b = bytearray(b)
     i = 8
     while i < len(b):
@@ -72,7 +73,6 @@ def rename_imports(b, renames):
             k += ml
             nl, k2 = R.leb(b, k)
             n = bytes(b[k2 : k2 + nl])
-            rest_start = k
             k = k2 + nl
             kind = b[k]
             k += 1
@@ -92,7 +92,8 @@ def rename_imports(b, renames):
                 k += 1
                 _, k = R.leb(b, k)
             new_m = renames.get((m.decode(), n.decode()), m.decode()).encode()
-            out += leb(len(new_m)) + new_m + bytes(b[rest_start:k])
+            new_n = (names or {}).get((m.decode(), n.decode()), n.decode()).encode()
+            out += leb(len(new_m)) + new_m + leb(len(new_n)) + new_n + bytes(b[k2 + nl : k])
         assert k == end
         b[i:end] = bytes([2]) + leb(len(out)) + out
         return bytes(b)
@@ -107,13 +108,19 @@ def run_merge(args, cwd):
 def main(pyodide_wasm, adapter_wasm, out):
     main_bytes = open(pyodide_wasm, "rb").read()
     # the main module's WASI calls that the adapter takes first (socket descriptors) come from `env` in the merge
-    main_renamed = rename_imports(main_bytes, {("wasi_snapshot_preview1", n): "env" for n in R.WASI_ROUTED})
     adapter = open(adapter_wasm, "rb").read()
     eng = _engine.engine()
     am = Module(eng, adapter)
     imports = R.func_imports(Module(eng, main_bytes))
     answered = {e.name for e in am.exports if isinstance(e.type, FuncType)} | {R.TRAMP}
     got = [i.name for i in Module(eng, main_bytes).imports if i.module == "GOT.func"]
+    # a GOT.func name that the adapter exports as a function (emscripten_console_log...) would be a second export of
+    # that name from `got` and lose to the adapter's: its global is merged under another name, so the import resolves
+    main_renamed = rename_imports(
+        main_bytes,
+        {("wasi_snapshot_preview1", n): "env" for n in R.WASI_ROUTED},
+        {("GOT.func", g): GOT_PREFIX + g for g in got if g in answered},
+    )
     renames = {
         ("env", n): "pyodide"
         for n in (
@@ -145,7 +152,14 @@ def main(pyodide_wasm, adapter_wasm, out):
                 stub_lines.append(f'  (func (export "{n}") {sig} {R.stub_results(n, rs)})')
         open(f"{td}/stubs.wasm", "wb").write(wat2wasm("\n".join(stub_lines + [")"])))
         open(f"{td}/got.wasm", "wb").write(
-            wat2wasm("(module\n" + "\n".join(f'  (global (export "{g}") (mut i32) (i32.const 0))' for g in got) + ")")
+            wat2wasm(
+                "(module\n"
+                + "\n".join(
+                    f'  (global (export "{GOT_PREFIX if g in answered else ""}{g}") (mut i32) (i32.const 0))'
+                    for g in got
+                )
+                + ")"
+            )
         )
         open(f"{td}/base.wasm", "wb").write(
             wat2wasm(
