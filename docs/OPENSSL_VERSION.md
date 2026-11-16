@@ -4,12 +4,13 @@
 > `tools/build_ssl.sh` builds CPython 3.15.0rc1's `_ssl` with a static OpenSSL 3.5.9 the official way (pyodide-build, Emscripten 6.0.5, new
 > wasm exceptions, the xbuildenv's CFLAGS) into `data/tls/` (`_ssl.cpython-315-wasm32-emscripten.so` and CPython's `ssl.py`); the wheel carries it
 > and `licenses/NOTICE` lists it. The route (c) prototype below (wasi-sdk's clang, `wasm/ssl_prelude.h`, a hand-made sysroot) is replaced by it.
-> **Two findings of the report are out of date**: the host's `/dev` is not mounted any more (`--dev`, `preopen_dev` are gone: the adapter
+> **Three findings of the report are out of date**: the host's `/dev` is not mounted any more (`--dev`, `preopen_dev` are gone: the adapter
 > serves a virtual `/dev`, whose `urandom` reads the libc's `getentropy`, `wasm/adapter/dev.h`), and 1.1.1w now seeds without it (checked:
 > `ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)` is created on the fused build with no `--dev`); so the "needs the host's `/dev`" entries and the
 > "no more host `/dev`" gain below no longer hold. And the `--site` folder now comes before the stdlib zip on `sys.path` (section 7). The
 > numbers of section 3 are those of the day, from a prototype that is gone; the version, CVE and support-window facts of sections 1, 2 and 4
 > were not re-checked (the network sources were not reachable then or now).
+> The `ssl.get_sigalgs()` trap, reported below as unexplained in the day's text, is explained and fixed (a missing `-DPY_CALL_TRAMPOLINE`: section 3).
 
 Research report, 2026-11-11. No code of the repository was changed; everything measured was built in a scratch
 folder outside the repository. Purpose: the argument for an upstream proposal to Pyodide when pyodide-nojs reaches alpha.
@@ -21,7 +22,7 @@ Sources are URLs, files, or the command that produced the number; what could not
 |---|---|---|---|
 | **today**: `_ssl` of CPython 3.15.0rc1 (ours) over the lock's `libopenssl` 1.1.1w (shared, Emscripten-built) | done | 1.1.1 has been end-of-life since 2023-09-11; no `group()`, `get_groups()`, `get_sigalgs()`, no ML-KEM/PQ (re-checked 2026-11-16: `get_groups()` raises `NotImplementedError ... requires OpenSSL 3.5 or later`); (the host's `/dev` for entropy, said here on 2026-11-11, is no longer needed) | `tools/build_ssl.sh`, `tools/prepare_testenv.sh`; probe below: `OpenSSL 1.1.1w  11 Sep 2023` |
 | (a) wait for Pyodide's `libopenssl` bump | unknown (weeks to never) | Pyodide's repo still has 1.1.1w **shared** (`pyodide/pyodide` main `packages/libopenssl/meta.yaml`); the 3.x one lives in `pyodide-recipes` as a **static** library for other packages; `ssl`/`_hashlib` are disabled in Pyodide 314+; open issue #6540 proposes AWS-LC instead | sections 1, 3a |
-| **(c) static OpenSSL 3.5.9 LTS into our `_ssl.so`** | **done as a prototype, about 1 day to productise** (build script, CI, NOTICE, a few tests) | none found; one unexplained trap in `ssl.get_sigalgs()` | built here: 342 s with `-j2` under load 12; `_ssl.so` 3.58 MB; `ssl.OPENSSL_VERSION` is `OpenSSL 3.5.9 29 Sep 2026` in the guest; TLS 1.3 to pypi.org and a local TLS server on **both** packagings |
+| **(c) static OpenSSL 3.5.9 LTS into our `_ssl.so`** | **done as a prototype, about 1 day to productise** (build script, CI, NOTICE, a few tests) | none found; the one trap seen, in `ssl.get_sigalgs()`, is explained (a missing `-DPY_CALL_TRAMPOLINE`, section 3) | built here: 342 s with `-j2` under load 12; `_ssl.so` 3.58 MB; `ssl.OPENSSL_VERSION` is `OpenSSL 3.5.9 29 Sep 2026` in the guest; TLS 1.3 to pypi.org and a local TLS server on **both** packagings |
 | (b) OpenSSL 3.x as shared `libssl.so` + `libcrypto.so` side modules, wasi-sdk-built | 2 to 4 days (a link recipe, `-shared` export lists, NEEDED handling); gains nothing over (c) for us, but is the shape a Pyodide package needs if several modules share it | needs `--experimental-pic -shared` linking of a large archive and the export list of the OpenSSL API (Emscripten's `EMULATE_FUNCTION_POINTER_CASTS`-like issues not met) | the same objects link as a static part today; the shared link was **not** tried |
 | (d) another TLS library for `_ssl` | not feasible for the real `_ssl`; AWS-LC only | CPython's `_ssl.c` and `_hashopenssl.c` speak the OpenSSL API; only AWS-LC (and LibreSSL, partly) are API-compatible | CPython `_ssl.c` `OPENSSL_IS_AWSLC` branches; discuss.python.org thread 44505; Pyodide issue #6540 |
 | **fallback: host TLS shim** (a guest `_ssl` in Python, TLS state machine on the host's `ssl`) | about 600 lines of Python + about 150 lines of host code, 1 to 2 weeks with tests | host's OpenSSL differs per platform; API fidelity is partial; no new wasm | a prototype (not kept): handshake with a local TLS server, hostname check enforced by the host (section 6) |
@@ -213,7 +214,7 @@ Claims and the measurement behind each (all from section 3):
 | It works on both packagings | local TLS server + pypi.org: fused and dynamic |
 | Size cost | full: 3.58 MB (1.14 MB gzip) vs 1.99 MB (0.81 MB gzip) today; trimmed 2.96 MB (0.97 MB gzip) |
 | (No more host `/dev` for entropy) | true on 2026-11-11 only: 1.1.1w without `--dev` gave `malloc failure`, 3.5.9 worked; with the virtual `/dev` both work |
-| Not free of problems | `get_sigalgs()` traps (undiagnosed) |
+| Not free of problems | `get_sigalgs()` trapped (explained 2026-11-16: the build lacked `-DPY_CALL_TRAMPOLINE`, section 3; fixed) |
 
 ## 6. Fallback: host TLS shim
 
@@ -271,7 +272,7 @@ That is two connections (one good, one with a wrong `server_hostname`) with 22 h
 | Size added to the wheel | +1.1 MB gzip full (0.97 MB gzip trimmed) over today's 0.8 MB | 0.8 MB gzip (already shipped via the lock) | 0 wasm; Python shim a few tens of KB |
 | Portability | identical on all hosts (the wasm carries its own TLS) | same | differs per host: OpenSSL version, Windows/macOS store, FIPS builds |
 | API fidelity | full `_ssl` (CPython's own C code); passes the same checks as today | full, minus 3.x features | partial: no sockets-level features (`SSL_set_fd`, PHA, keylog, sessions, sigalgs, server side initially) |
-| Effort | about 1 day productise + the `get_sigalgs` trap | 0 | 1 to 2 weeks (+ risk of long tail of `test_ssl`) |
+| Effort | about 1 day productise (the `get_sigalgs` trap is explained and fixed) | 0 | 1 to 2 weeks (+ risk of long tail of `test_ssl`) |
 | Needs the host `/dev` (as of 2026-11-11; no longer for any column) | no | yes (`--dev`) | no |
 | Works with the project's rules (one toolchain, no run-time Node, both packagings) | yes (wasi-sdk 34 clang) | yes | yes (no wasm) |
 
@@ -287,5 +288,5 @@ Recommendation (a guess from the above): ship route (c) as the default real TLS 
 * **openssl.org / openssl-library.org are not reachable** from the session (proxy 403 / ENOTFOUND): the LTS end dates (3.0 on 2026-09-07, 3.5 to 2030-04), the 3.6 and 4.0 support windows, and **which CVEs affect 1.1.1** are from memory or only partly from GitHub's `CHANGES.md` (which lists fixes in 3.x branches). The latest release numbers (3.0.22, 3.5.9, 3.6.5, 4.0.3 and dates) are from `VERSION.dat`/`CHANGES.md` on GitHub.
 * GitHub's API is blocked and `pyodide/pyodide`, `pyodide/pyodide-recipes` are not attached to the session: issue/PR content came from the fetch tool's summary of GitHub pages (a small model), not raw text; quotes are as reported by it (PRs #6044, #598, #647, #2263, issues #6540, #6032). The full commit history of the 1.1.1w recipe beyond three commits shown was not read, so "why 1.1.1" is **not established** beyond what is quoted.
 * Whether Pyodide will accept the proposal; whether the `pyodide-build` toolchain (Emscripten's `emcc`) links the same OpenSSL differently from wasi-sdk's clang; Pyodide's JavaScript `dlopen` of the produced `.so` was not tried (only our Python loader on both packagings).
-* The `ssl.get_sigalgs()` trap (cause unknown), shared-library route (b) (not built), AWS-LC (not built), performance of crypto (not benchmarked), memory use, behaviour under `-O0`/`-Os`, patch 0002's necessity, the dynamic packaging for the host shim, the network test tier of the repository, and the complete `test_ssl` of CPython against the 3.5.9 build.
+* The `ssl.get_sigalgs()` trap (explained 2026-11-16, see section 3: no longer open), shared-library route (b) (not built), AWS-LC (not built), performance of crypto (not benchmarked), memory use, behaviour under `-O0`/`-Os`, patch 0002's necessity, the dynamic packaging for the host shim, the network test tier of the repository, and the complete `test_ssl` of CPython against the 3.5.9 build.
 * Timings are single runs on a 4-core machine at load 10 to 14, shared with another agent: they show order of magnitude only.

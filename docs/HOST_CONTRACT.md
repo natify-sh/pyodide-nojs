@@ -34,8 +34,10 @@ How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the
 | `pyodide.asm.wasm`, `adapter.wasm` | dynamic | Pyodide's main module as released, and the adapter linked to it by a WAT shim (`_wasm.py`) |
 | `python_stdlib.zip`, `pyodide-lock.json` | both | the standard library; the lock of the release (micropip) |
 | `wasm-opt.wasm` | both, at run time only for a wheel with legacy exceptions | Binaryen, built with wasi-sdk, run in-process (no native Binaryen, no Node) |
+| `tls/` | both | the guest's real `_ssl` (OpenSSL 3.5.9) and CPython's `ssl.py`, copied into the guest's site-packages (`tools/build_ssl.sh`); a missing folder is a `FileNotFoundError` |
+| `py/` | both | `micropip` and `packaging`, copied into the guest's site-packages (`tools/build_data.sh`); a missing folder is a `FileNotFoundError` |
 
-Python files of the guest (`src/pyodide_nojs/guest/`, 443 lines: `hostnet.py`, `pyodide_lock.py`, start and run) run inside the guest.
+Python files of the guest (`src/pyodide_nojs/guest/`, 660 lines by `wc -l` of 2026-11-16: `hostnet.py`, `pyodide_lock.py`, `pyodide_nojs_asyncio.py`, start and run, and the `.pth`) run inside the guest.
 
 ## 2. WASI
 
@@ -130,8 +132,10 @@ descriptor numbers, flags (`O_NONBLOCK`, `MSG_DONTWAIT`) and the table that dups
 
 HTTP(S) is not an import: the host's `fetch` (`_net.Net.fetch`, `urllib`) is a `Func` the host puts into a table slot
 and names to the guest in a file `_hostnet_slots.py` (`FETCH`, `FREE`); the guest calls it through ctypes
-(`guest/hostnet.py`). Why not wasm: Pyodide's `_ssl` is a stub in the main module, so the guest has no TLS of its own
-(the real `_ssl` of `tools/prepare_testenv.sh` is a test-environment side module). That is a gap of the product, not of the engine: a guest `_ssl` would remove the operation (BACKLOG section 9, "HTTPS in a component").
+(`guest/hostnet.py`). The guest always has a TLS of its own: the real `_ssl` (OpenSSL 3.5.9, `data/tls`), so the fetch is
+not needed for HTTPS; it stays as the opt-in `--pyfetch` route (and `hostnet.install()`), which uses the host's proxies,
+DNS and trusted roots and needs only `--http`, a narrower grant than `--tcp --dns`. Why not wasm: the proxies, the
+host's DNS and its trust store are the OS's facts.
 
 ### 3.3 `fs`: 3 imports
 
@@ -193,19 +197,19 @@ and how many the adapter answers on its own.
 
 Sizes: BACKLOG 8 (2026-11-15) gave the host's Python as 3,802 lines (`src/pyodide_nojs/*.py`, 170 KB) against the adapter's
 4,183 lines of C (181 KB), the guest-side Python 443 lines; about 2,300 lines of the host are engine/OS primitives and about
-850 are pure logic that could live in the adapter. `wc -l` of 2026-11-16 gives more (the code has grown since): 4,193 lines
-for `src/pyodide_nojs/*.py`, 4,268 for `wasm/adapter.c` and `wasm/adapter/*.h`, 443 for `guest/*.py` (unchanged). The line
-counts per file below are `wc -l` of 2026-11-16 (`_host.py` 1401 lines includes the engine glue).
+850 are pure logic that could live in the adapter. `wc -l` of 2026-11-16 gives more (the code has grown since): 4,321 lines
+for `src/pyodide_nojs/*.py`, 4,301 for `wasm/adapter.c` and `wasm/adapter/*.h`, 660 for `guest/*`. The line
+counts per file below are `wc -l` of 2026-11-16 (`_host.py` 1470 lines includes the engine glue).
 
 | piece | lines | what it is | state |
 |---|---|---|---|
 | `_cif.py` | 264 | libffi's `ffi_cif`/`ffi_type` records read from the guest's memory: a call's arguments, a closure's signature and frame, results | pure logic; the calls themselves (`ffi_call`, `ffi_prep`) stay host operations. Measure the 59 us call / 168 us callback before and after |
-| `_sockaddr.py` | 317 | option/flag/error tables, sockaddr/msghdr/send/recv helpers, `getaddrinfo`/`getnameinfo` result building, `ca_bundle` | tables and layouts: logic; the OS calls stay |
+| `_sockaddr.py` | 326 | option/flag/error tables, sockaddr/msghdr/send/recv helpers, `getaddrinfo`/`getnameinfo` result building, `ca_bundle` | tables and layouts: logic; the OS calls stay |
 | `_timecalc.py` | 171 | the calendar and JS date helpers, `t_localtime`/`t_mktime`/`t_tzset` shapes, the CPU clocks | the calendar is logic; the offset of a zone and the CPU time are the OS's |
 | `_tty.py` | 257 | termios and window size translated between the host's numbers and Linux's | tables are logic; the termios calls are the OS's |
-| the loader's error texts (`_host.py`: `_DL_WHY`, `_dl_error`) | part of 1401 | V8's `LinkError`/`CompileError` wording and `__dl_seterr` | movable, see `loader.error` |
-| `_dl_sym`, `_dl_call`, `_dl_scope` bookkeeping (`_host.py`) | part of 1401 | the host's per-instance exports and scopes | movable only together, see `loader.sym` |
-| `_net.fetch` (HTTP by `urllib`) | part of 511 | the host does HTTP(S) because the guest has no `_ssl` | goes away with a guest TLS (BACKLOG 9) |
+| the loader's error texts (`_host.py`: `_DL_WHY`, `_dl_error`) | part of 1470 | V8's `LinkError`/`CompileError` wording and `__dl_seterr` | movable, see `loader.error` |
+| `_dl_sym`, `_dl_call`, `_dl_scope` bookkeeping (`_host.py`) | part of 1470 | the host's per-instance exports and scopes | movable only together, see `loader.sym` |
+| `_net.fetch` (HTTP by `urllib`) | part of 542 (`_net.py`) | the host's HTTP(S) for `--pyfetch`: the host's proxies, DNS and trusted roots (the guest has its own `_ssl`) | stays as the opt-in route; an OS fact, not movable |
 
 What stays in the host is what needs the engine or the OS: instantiate, globals, tags, exports, creating a function
 (`loader.instantiate`, `got_set`, `sym`, `ffi_call`, `ffi_prep`, `call_any`, `depth`), sockets and DNS (`net.*`), the

@@ -3,8 +3,8 @@
 > **Status: a study, parked (as of 2026-11-11; the owner's decision, BACKLOG.md D4).** The guest's root stays a folder on the host's disk;
 > nothing in this file is built. The current design is in the README ("The guest is isolated": the root is a temporary host folder made by
 > `Pyodide._setup_root`, a host folder is given with `mounts=` / `--mount`, WASI preopens) and in `BACKLOG.md` (D4, D5, D13). What changed
-> since the study, checked 2026-11-16: the adapter is 4,268 lines (`wasm/adapter.c` and `wasm/adapter/*.h`; the study counted 3,371) and
-> `adapter.wasm` is 86,907 bytes (72 KB then); the guest's descriptor numbers are decoupled from WASI's (D5 done: the "own fd table" row
+> since the study, checked 2026-11-16: the adapter is 4,301 lines (`wc -l wasm/adapter.c wasm/adapter/*.h`; the study counted 3,371) and
+> `adapter.wasm` is 87,919 bytes (`os.path.getsize` of the built file; 72 KB then); the guest's descriptor numbers are decoupled from WASI's (D5 done: the "own fd table" row
 > of section 2 exists already); the host's `/dev` is gone, the adapter serves a virtual `/dev` (W2 done); the per-section line counts and the
 > N/L/W rows below are those of 2026-11-11, `docs/DIFF_AUDIT_*.md` and BACKLOG.md have the current state of each row. Keep this file for
 > the cost and the numbers for the day the question comes back.

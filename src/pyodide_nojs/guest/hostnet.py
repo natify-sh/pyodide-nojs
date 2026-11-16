@@ -13,7 +13,7 @@ table slot the host wrote to `_hostnet_slots`; `ffi_call_js` is in the adapter).
 * a module in the place of `urllib3.contrib.emscripten.fetch` (which needs JavaScript), so `requests` works;
 * `run(coro)`: an asyncio loop with no I/O of its own.
 
-`install()` puts the first four in place; `fetch` and `run` work without it.
+`install()` puts pyfetch, the urllib handler and the urllib3 module in place; `fetch` and `run` work without it.
 """
 
 import asyncio

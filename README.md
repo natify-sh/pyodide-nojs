@@ -9,7 +9,7 @@ pyodide-nojs -c "import sys; print(sys.version, sys.platform)"      # 3.15.0rc1 
 pyodide-nojs script.py arg1 arg2
 pyodide-nojs                                                        # a REPL on a terminal; the script on stdin otherwise
 ```
-Command line flags (`pyodide-nojs -h` has the rest): `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--mount GUEST=HOST`, `--mount-cwd`, `--env K=V`, `--inherit-env`, `--inherit-network` / `--tcp` / `--udp` / `--dns` / `--http` (the network, off by default: see below), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL; `Pyodide.run(code, allow_top_level_await=True)` in the API), `--asm-wasm FILE` / `--stdlib FILE` / `--data DIR` (other wasm files than the package's), `-v` (log the loader and the network).
+Command line flags (`pyodide-nojs -h` has the rest): `--flavor fused|dynamic`, `--site DIR` (a folder copied into the guest's site-packages), `--mount GUEST=HOST`, `--mount-cwd`, `--env K=V`, `--inherit-env`, `--inherit-network` / `--tcp` / `--udp` / `--dns` / `--http` (the network, off by default: see below), `--allow-top-level-await` (`await` at the top level of any program: `-c`, a file, stdin, the REPL; `Pyodide.run(code, allow_top_level_await=True)` in the API), `--pyfetch` (`urllib`, `urllib3` and `pyodide.http.pyfetch` send through the host's fetch: see the network paragraph), `--asm-wasm FILE` / `--stdlib FILE` / `--data DIR` (other wasm files than the package's), `-v` (log the loader and the network), `--version`.
 
 ```python
 from pyodide_nojs import Pyodide
@@ -38,7 +38,7 @@ files (`mounts={"/data": "/host/dir"}`), sockets, `ctypes`/`cffi`. What needs th
 not Pyodide's whole index), and in the guest `micropip` resolves a name in it first, downloads the wheel from `https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/` (sha256 checked) and unpacks it
 (`guest/pyodide_lock.py`, hooked by `guest/pyodide_nojs_start.py`, which a `.pth` file runs at start, when `micropip` is imported). `import micropip` works out of the box: the package carries `micropip` 0.11.1 and `packaging` 26.1 (the release's wheels unpacked into `data/py` by `tools/build_data.sh`, sha256 checked against the lock, copied into the guest's site-packages before the `site=` folders, so a `site=` copy of `micropip` wins); `--site`/`site=` is for your own packages. Installing needs network access, and HTTPS: call `hostnet.install()` (the host's fetch) or rely on the guest's own TLS (always there: the real `_ssl` with OpenSSL 3.5.9 and CPython's `ssl.py` from the package's `data/tls`, built by `tools/build_ssl.sh`, in the wheel; Pyodide's own `ssl` is a stub). A package not in the lock still comes from PyPI as before;
 a lock package already installed in the guest (by any source) is not fetched again or overwritten; scipy installs and runs (`scipy.linalg.det`). Only lock entries whose `package_type` is not `package` (the shared libraries `libopenblas`, `libopenssl`, `test-cpp-exceptions` and `test-sharedlib`) raise `NotImplementedError`: they need Pyodide's JavaScript loader.
-The lock and the guest files `pyodide_lock.py`, `hostnet.py`, `pyodide_nojs.pth` and `pyodide_nojs_start.py` are written before the `site=` folders, so a `site=` file of the same name wins; `pyodide_nojs_run.py` (the host's status protocol) is written after them, so ours always wins. A guest sees `pyodide_nojs_start` and `pyodide_nojs_run` in `sys.modules`; there is no `sitecustomize` (`import sitecustomize` raises `ModuleNotFoundError` unless a `site=` folder has one, and then it runs as in CPython); `__main__` holds none of the start or run code's names.
+The lock and the guest files `pyodide_lock.py`, `hostnet.py`, `pyodide_nojs.pth`, `pyodide_nojs_start.py` and `pyodide_nojs_asyncio.py` are written before the `site=` folders, so a `site=` file of the same name wins; `pyodide_nojs_run.py` (the host's status protocol) is written after them, so ours always wins. A guest sees `pyodide_lock`, `pyodide_nojs_asyncio`, `pyodide_nojs_start` and `pyodide_nojs_run` in `sys.modules`, and a placeholder module `urllib3.contrib.emscripten` that `pyodide_nojs_start.py` registers (so that `urllib3` keeps its socket backend); there is no `sitecustomize` (`import sitecustomize` raises `ModuleNotFoundError` unless a `site=` folder has one, and then it runs as in CPython); `__main__` holds none of the start or run code's names.
 
 **The guest is isolated.** Its environment is Pyodide's own minimal one (`USER`/`LOGNAME=web_user`, `PATH=/`, `PWD=/`, `HOME=/home/pyodide` (the folder exists), `LANG=en_US.UTF-8`, `PYTHONINSPECT=1` (set by Pyodide's JavaScript, mirrored), `LD_LIBRARY_PATH`), plus `env=`; nothing of the host's environment or files reaches it unless you ask (one exception: the CA bundle for TLS is read from the host, as `SSL_CERT_FILE` names it or from the system's, and copied to the guest's `/etc/ssl/cert.pem`, which `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` name there: a file named by `SSL_CERT_FILE` that also holds a private key would put that key there):
 `Pyodide(inherit_env=True)` / `--inherit-env` pass ALL the host's variables too, secrets included: the guest can print or send them (`env=` / `--env K=V` win; the interpreter's own `PYTHONHOME`, `PYTHONPATH`, `LD_LIBRARY_PATH` are not taken), `mounts=` / `--mount GUEST=HOST` give a host folder, `--mount-cwd` mounts the host's current folder at `/host` (the guest itself starts in `/home/pyodide`, as in Pyodide). `sys.executable` is `'/home/pyodide/this.program'` as in the browser (the file does not exist); to tell this runtime from the browser's, read `sys._emscripten_info.runtime` (here `'pyodide-nojs <ver>'`). The time zone is still the host's; the network is off unless you switch it on (next paragraph).
@@ -48,8 +48,8 @@ The lock and the guest files `pyodide_lock.py`, `hostnet.py`, `pyodide_nojs.pth`
 | | |
 |---|---|
 | Pyodide | **315.0.0-alpha.2** (`pyodide_nojs.PYODIDE_VERSION`), Python 3.15.0rc1, Emscripten 6.0.5, wheels of ABI `pyemscripten_2026_5_wasm32` (`PYODIDE_ABI`) |
-| Python | 3.10+ (the host); CPython and PyPy |
-| Needs at run time | wasmtime-py (`[wasmtime]`, 50.0.1+) and the wasm files **in the wheel**: `pyodide.asm.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`, `wasm-opt.wasm`, `pyodide-lock.json`. No Node, no native Binaryen |
+| Python | 3.10+ (the host); CPython (PyPy untested) |
+| Needs at run time | wasmtime-py (`[wasmtime]`, 50.0.1+) and the wasm files **in the wheel**: `pyodide.asm.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`, `wasm-opt.wasm`, `pyodide-lock.json`, and the folders `data/tls` (the real `_ssl` and `ssl.py`) and `data/py` (`micropip`, `packaging`): without them the package raises `FileNotFoundError` that names the build command. No Node, no native Binaryen |
 
 ## How it works
 Pyodide's `pyodide.asm.wasm` imports 263 functions from `env` (264 in the package's wasm, after the `setsockopt` patch below): Emscripten's JavaScript glue. Here the glue is **wasm**, after the
@@ -73,15 +73,16 @@ More in [docs/EXPERIMENT.md](docs/EXPERIMENT.md) (the experiment this came from:
 and [docs/NOTES-FUSEDWASI-AND-TESTSUITE.md](docs/NOTES-FUSEDWASI-AND-TESTSUITE.md) (WASI 0.2 over fusedwasi, next).
 
 ## Build (CI does this; Node is a build tool only)
-One toolchain: **wasi-sdk 34's clang** builds `adapter.wasm`, `wasm-opt.wasm` and the guest's `_ssl`; Binaryen's `wasm-opt`/`wasm-merge` and binaryen.js (`tools/patch_main.mjs`, which makes libc's `setsockopt` call the adapter) come from npm (`package.json` pins Pyodide and Binaryen; Dependabot tracks them).
+One toolchain: **wasi-sdk 34's clang** builds `adapter.wasm` and `wasm-opt.wasm`; the one exception is the guest's `_ssl`, which `tools/build_ssl.sh` builds the official way (pyodide-build 0.39.3, Emscripten 6.0.5); Binaryen's `wasm-opt`/`wasm-merge` and binaryen.js (`tools/patch_main.mjs`, which makes libc's `setsockopt` call the adapter) come from npm (`package.json` pins Pyodide and Binaryen; Dependabot tracks them).
 
 ```sh
 uv sync
 sh tools/build_data.sh pyo-build    # -> src/pyodide_nojs/data/*  (wasm-opt.wasm from source takes ~12 min; WASM_OPT_WASM=path reuses one)
+sh tools/build_ssl.sh pyo-build     # -> src/pyodide_nojs/data/tls (the real _ssl; needs uv, network, about 4 GB); the package does not run without it
 sh tools/prepare_testenv.sh pyo-build # -> pyo-build/testenv: numpy, openssl, cffi, the `test` wheel, python_tests.yaml
 uv build --wheel               # the wheel carries data/ (the wasm is built, not committed)
 ```
-Needs: node, npm, curl, git, cmake and ninja (for `wasm-opt.wasm`); `data/tls` (`sh tools/build_ssl.sh pyo-build`) before `prepare_testenv.sh`.
+Needs: node, npm, curl, git, cmake and ninja (for `wasm-opt.wasm`); uv and the network for `build_ssl.sh`.
 
 ## Tests
 ```sh
@@ -95,4 +96,4 @@ The suite runs one guest process per test module, as Pyodide's `test_cpython_cor
 CI (`tests.yml`): the offline tests on Linux, Windows and macOS (Python 3.10 and 3.15), the network checks, and the suite (one job per build, the modules spread over the cores by pytest-xdist).
 
 ## Licenses
-MIT for this repository. The wheel carries binaries under their own licenses: Pyodide (MPL-2.0, with CPython's PSF license and Emscripten's/musl's MIT), Binaryen (Apache-2.0) and wasi-sdk's libraries: see [licenses/NOTICE](licenses/NOTICE).
+MIT for this repository. The wheel carries binaries under their own licenses: Pyodide (MPL-2.0, with CPython's PSF license and Emscripten's/musl's MIT), Binaryen (Apache-2.0), wasi-sdk's libraries, OpenSSL 3.5.9 (Apache-2.0, in `data/tls`), `micropip` (MPL-2.0) and `packaging` (Apache-2.0 or BSD-2-Clause) (`data/py`): see [licenses/NOTICE](licenses/NOTICE).

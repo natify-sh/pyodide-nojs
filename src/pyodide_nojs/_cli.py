@@ -224,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     net.add_argument("--udp", action="store_true", help="UDP sockets")
     net.add_argument("--dns", action="store_true", help="name lookup (numeric addresses always work)")
     net.add_argument(
-        "--http", action="store_true", help="the host's fetch (hostnet.install() or the guest's own fetch)"
+        "--http",
+        action="store_true",
+        help="the host's fetch (used by --pyfetch or hostnet.install())",
     )
     net.add_argument(
         "--pyfetch",

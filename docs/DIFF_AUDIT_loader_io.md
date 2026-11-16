@@ -22,7 +22,7 @@ runs of these probes; the raw outputs are not committed (`--keep DIR` writes the
 
 ```
 PYODIDE_DIST=<dir with pyodide.mjs> uv run python tools/diff_pyodide.py [--flavors fused,dynamic] [--keep DIR] \
-    [--ours-arg=--dev] [--isolate] [--jobs N] tools/diff_probes/PROBE.py ...
+    [--isolate] [--jobs N] tools/diff_probes/PROBE.py ...
 ```
 
 * `tools/diff_pyodide.py` puts `tools/diff_probes/_prelude_io.py` in front of a probe (the fresh directory `B`, `case(id, fn)`
@@ -53,7 +53,7 @@ PYODIDE_DIST=<dir with pyodide.mjs> uv run python tools/diff_pyodide.py [--flavo
 | mmap_2_libc_isolated.py (isolated) | 74 | 1 | 1 | libc mmap/munmap/msync/mprotect/madvise |
 | io_1_streams.py | 604 | 151 | 151 | sys.std*, isatty, terminal size, ioctl/termios/fcntl/blocking/fsync/lseek/fstat on fds 0-2, a file, a dir, pipe ends, /dev/null (most of the 151 are the pipe and /dev/null rows: no pipe, no /dev) |
 | io_2_poll.py | 111 | 38 | 38 | select/poll/selectors, timeouts, epoll absent |
-| io_3_dev_env_log.py | 500 | 176 | 176 | 21 device paths x 13 operations, /proc, /sys, directories, the environment and the C getenv/setenv, sysconf (without `--dev`; with `--ours-arg=--dev` 278/300, see 5) |
+| io_3_dev_env_log.py | 500 | 176 | 176 | 21 device paths x 13 operations, /proc, /sys, directories, the environment and the C getenv/setenv, sysconf (the host's `/dev`, `--dev`, was removed later: the adapter's virtual `/dev`, W2; see 5) |
 | io_4_isolated.py (isolated) | 62 | 19 | 19 | hangs, zero-length reads, closing std fds, descriptor numbers, EMFILE, signals/exit |
 | io_5_poll_isolated.py (isolated) | 37 | 14 | 14 | libc poll/epoll/eventfd, pipes, socketpair |
 | io_6_emlog_isolated.py (isolated) | 155 | 47 | 47 | emscripten_log (22 flag values, about 14 formats), emscripten_out/err/..., libc stdio, system, fork/spawn |

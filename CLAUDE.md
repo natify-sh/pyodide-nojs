@@ -13,7 +13,7 @@ The maintainer communicates in Ukrainian; code, comments, commit messages and do
 
 ## Hard rules
 * **No run-time Python dependencies.** wasmtime-py is the `[wasmtime]` extra and a dev dependency; a missing engine says so (`_engine.require_wasmtime`). Python 3.10+. (The owner, 2026-11-10.)
-* **The run time needs wasmtime-py and the wasm files of the package** (`pyodide.asm.wasm`, `wasm-opt.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`), **no Node and no native Binaryen**. Node and npm's Binaryen
+* **The run time needs wasmtime-py and the wasm files of the package** (`pyodide.asm.wasm`, `wasm-opt.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`, `pyodide-lock.json`, and the folders `data/tls` and `data/py`), **no Node and no native Binaryen**. Node and npm's Binaryen
   (`wasm-opt`, `wasm-merge`) exist only in the build (`tools/*.sh`) and in CI. (The owner, 2026-11-10.)
 * **One toolchain: wasi-sdk 34's clang** builds every wasm we build (`adapter.wasm`, `wasm-opt.wasm`); no `clang` from the system. **One exception (the owner, 2026-11-16): the guest's `_ssl`** (with its OpenSSL 3.5.9, the version CPython's own CI builds against) is built the official way, as Pyodide builds its packages: `pyodide-build` and Emscripten 6.0.5, with the CFLAGS of the pinned Pyodide's xbuildenv, in the build and in CI only (a build tool, like Node); the result is a file in `data/`, never committed. (The owner, 2026-11-10 for the rule.)
 * **Both packagings are tested** wherever a test runs, and **Pyodide's official test suite** (`tests/test_pyodide_suite.py`, `python_tests.yaml`, libregrtest) runs on both, locally and in CI. A feature that works on one only is not done. (The owner, 2026-11-10.)
@@ -76,7 +76,7 @@ Report:      files changed, commands run with output, docs updated, open questio
 
 ## Working on the code
 * `wasm/adapter.c` is the glue as wasm: one translation unit that includes the sections in `wasm/adapter/*.h` (header-only, `common.h` first; `tools/build_adapter.sh` compiles `adapter.c` only). Wasmtime's adapter rules hold (checked by `tests/test_shape.py`): **no data section** (`-fno-jump-tables`, names built from integer constants), **no stack of its own** (`-z stack-size=0`, it runs on Pyodide's stack),
-  state in wasm globals pointing at blocks from the main module's `malloc`. It imports only WASI, the main module's memory/table/stack pointer/allocator and the host's `loader`/`net`/`aux`.
+  state in wasm globals pointing at blocks from the main module's `malloc`. It imports only WASI, the main module's memory/table/stack pointer/allocator and the host's `loader`/`net`/`fs`/`aux`.
 * `src/pyodide_nojs/_host.py` (`Pyodide`): `_start` builds either flavor; `run()` executes code in the guest's `__main__` through a wrapper that turns `SystemExit` into a status (Emscripten's `exit()` ends in `unreachable`).
   `_engine.py` is the one engine (exceptions, function references, GC), the machine-code cache in the user's cache dir, and `wasm-opt.wasm` run in-process. `_wasm.py` is the WAT of the dynamic build; import types come from `Module.imports`
   (wasmtime-py prints every reference type as `anyref`; here they are all `externref`). `guest/hostnet.py` runs inside the guest.
@@ -89,7 +89,7 @@ Report:      files changed, commands run with output, docs updated, open questio
   * `_cif.py`: libffi's `ffi_cif`/`ffi_type` records read from the guest's memory (a call's arguments, a closure's signature and frame, results).
 * `_guest.py` (`Guest`) is the one read-only handle to what the components share (the store, exports, memory, table, the memory accessors, and `cur`, the call contexts, changed only inside `Guest` (`Guest.wrap`)); `_net.py` (`Net`) is the host's sockets and fetch with their state. **Every mutable piece of state has one owner**: components never read or write each other's attributes, only call narrow public methods, pass values or hold `Guest`; no mixins. `tests/test_state_ownership.py` checks it on the AST (a new component is added to its list) and pyright's `reportPrivateUsage` is an error for `src` and `tools` (the tests may use private names).
 * Wheels with legacy exceptions are converted at `dlopen` by `wasm-opt.wasm` (`Pyodide.converted` counts them); the modules the build ships are converted at build time.
-* The tests need the build: `sh tools/build_data.sh pyo-build` and `sh tools/prepare_testenv.sh work` (`WASM_OPT_WASM=path` skips the 12-minute build of `wasm-opt.wasm`). A missing build is a skip locally and a failure with `CI` set.
+* The tests need the build: `sh tools/build_data.sh pyo-build` and `sh tools/prepare_testenv.sh pyo-build` (`WASM_OPT_WASM=path` skips the 12-minute build of `wasm-opt.wasm`). A missing build is a skip locally and a failure with `CI` set.
 * **The host stays thin** (the owner, 2026-11-15): the project's aim is a full Pyodide with the least from the host, so new logic goes into the adapter (wasm) unless it needs a primitive of the engine or a fact of the OS (instantiate, globals, exports, creating a function, sockets, DNS, the time zone, entropy, the terminal). A new host operation (an import of the adapter) is justified in its brief: why it cannot be done in wasm. `docs/HOST_CONTRACT.md` lists the whole contract; `tests/test_host_contract.py` fails when an import of the adapter has no row there.
 * A host function must not hold the engine across a wait for another thread. The library starts no threads and the guest has none (as in Pyodide). The CLI runs the guest on a worker thread and keeps the main thread free for Ctrl-C (Pyodide's own advice); `Pyodide.interrupt()` is safe from any thread: it stores one word in the guest's memory through a base pointer that cannot move (`memory_may_move=False`), under one lock that `close()` takes first, and never touches the wasmtime Store.
 
@@ -100,7 +100,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run pyright
 sh tools/build_data.sh pyo-build                                # the wasm of the package -> src/pyodide_nojs/data (needs node, npm; cmake + ninja for wasm-opt.wasm)
 sh tools/build_ssl.sh pyo-build                                 # the guest's real _ssl + ssl.py (OpenSSL 3.5.9; pyodide-build, Emscripten 6.0.5; needs uv, network, 4 GB) -> src/pyodide_nojs/data/tls
-sh tools/prepare_testenv.sh pyo-build                           # numpy, micropip, openssl, the real _ssl, the `test` wheel -> pyo-build/testenv
+sh tools/prepare_testenv.sh pyo-build                           # numpy, openssl 1.1.1w (the ctypes test), cffi/pycparser, the `test` wheel, python_tests.yaml -> pyo-build/testenv (micropip and the real _ssl are the package's own: data/py, data/tls)
 uv run pytest -m "not network and not suite"               # offline, both packagings
 uv run pytest -m network                                   # PyPI and jsDelivr
 uv run pytest -m suite                                     # Pyodide's official CPython suite, both packagings (long; -n auto spreads it over the cores; PYODIDE_SUITE_SHARD=I/N, PYODIDE_SUITE_FLAVORS=fused)

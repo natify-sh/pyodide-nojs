@@ -11,8 +11,9 @@
 > * **The fused module** has 71 imports: 33 `wasi_snapshot_preview1`, 16 `loader`, 19 `net`, 3 `fs` (not 27/4/9); the host operations are
 >   38 in all (`net.resolve` is gone). The adapter answers more than the 49 `env` imports counted below (111 exports; 91 of the 264 `env`
 >   imports of `pyodide.asm.wasm`). The list is in HOST_CONTRACT.md.
-> * **Toolchain**: every wasm we build now uses wasi-sdk 34's clang, the `_ssl` and the adapter included (the table "Toolchain" names
->   Ubuntu's clang 18 for them: the state of the experiment day).
+> * **Toolchain**: the wasm we build (`adapter.wasm`, `wasm-opt.wasm`) uses wasi-sdk 34's clang; the guest's `_ssl` is built by
+>   `tools/build_ssl.sh` with pyodide-build and Emscripten 6.0.5, and `ssl_prelude.h` is gone (the table "Toolchain" names Ubuntu's
+>   clang 18 and the prelude for the `_ssl`: the state of the experiment day).
 > * **The host's `/dev`** is not mounted any more (`--dev`, `PREOPEN_DEV` are gone): the adapter serves a virtual `/dev`. The measurements
 >   that say "`PREOPEN_DEV=1`" are of the day before that.
 

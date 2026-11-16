@@ -1,8 +1,9 @@
 """CPython of Pyodide (`pyodide.asm.wasm`) run by wasmtime-py with no JavaScript.
 
 The Emscripten `env` glue is wasm (`adapter.wasm`, C, after the shape of Wasmtime's preview1 adapter); this file is
-what a wasm module can not do itself: WASI (wasmtime's own), the four operations of the loader (the host holds the
-instances and their exports by name) and the host's sockets (WASI preview1 has no `connect`).
+what a wasm module can not do itself: WASI (wasmtime's own), the loader's operations (the host holds the instances and
+their exports by name), the host's sockets (WASI preview1 has no `connect`), `fs` (`statvfs`, the terminal) and the
+fetch; the whole list is in docs/HOST_CONTRACT.md.
 
 Two builds of the same sources, one `Pyodide` class:
 

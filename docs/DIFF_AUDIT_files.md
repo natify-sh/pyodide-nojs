@@ -22,7 +22,7 @@ the Node script that `tools/diff_pyodide.py` generates (cwd `/home/pyodide`; our
 ## 1. The harness
 
 ```
-uv run python tools/diff_pyodide.py [-q] tools/diff_probes/files_open.py [more probes]
+uv run python tools/diff_pyodide.py tools/diff_probes/files_open.py [more probes]
 ```
 
 It runs a probe on the real Pyodide and on ours (fused, dynamic; stdin is `/dev/null`), normalises the probe's own
