@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--allow-top-level-await",
         action="store_true",
-        help="in the REPL, accept `await` at the top level (run on the host-fetch event loop, as in Pyodide's REPL)",
+        help="accept `await` at the top level of the program (-c, a file, stdin; the REPL too): run on asyncio's loop",
     )
     ap.add_argument("-v", "--verbose", action="store_true", help="log the loader and the network to stderr")
     ap.add_argument("--version", action="store_true", help="print the versions and exit")
@@ -303,4 +303,4 @@ def main(argv: list[str] | None = None) -> int:
         if code is None:
             return repl(py, call)
         # 0, 1 for an uncaught error, 130 for an uncaught KeyboardInterrupt, or the code of sys.exit()/os._exit()
-        return call(py.run, code, argv0, program=True)
+        return call(lambda: py.run(code, argv0, allow_top_level_await=ns.allow_top_level_await), program=True)

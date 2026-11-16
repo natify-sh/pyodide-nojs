@@ -17,3 +17,7 @@ if os.path.exists(LOCK):
     import pyodide_lock  # pyright: ignore[reportMissingImports]  # its sibling file in the guest
 
     pyodide_lock.hook(LOCK, LOCK_BASE)
+
+import pyodide_nojs_asyncio  # pyright: ignore[reportMissingImports]
+
+pyodide_nojs_asyncio.hook()

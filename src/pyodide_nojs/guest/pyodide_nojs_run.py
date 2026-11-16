@@ -76,7 +76,7 @@ def _finish(err):
     return rc
 
 
-def run(code_text):
+def run(code_text, allow_top_level_await=False):
     """One `run()` of the host: the user's code in __main__, SystemExit as an exit status (the interpreter must
     survive it: Emscripten's exit() ends in `unreachable`), an uncaught KeyboardInterrupt as a traceback and status 130
     (a shell's 128 + SIGINT), any other error as a traceback and status 1.
@@ -84,13 +84,36 @@ def run(code_text):
     The host's Ctrl-C (`Pyodide.interrupt`) can come at any look for signals, also in this wrapper: once the user's code
     is over, SIGINT is given to a handler that does nothing until the status is written, so that a late signal can not
     cut the traceback, the flush or the status (the host drops a signal that came late for the run anyway). The status
-    is the return value."""
+    is the return value.
+
+    With `allow_top_level_await` (the host's `run_async`) the code may `await` at its top level: it is compiled as
+    `python -m asyncio` does and, if it has an `await`, run to its end by asyncio's Runner (the default loop, SIGINT
+    cancels the main task). The traceback then starts at the program's own frame, as the plain path's does."""
     err = None
     try:
         import __main__
 
-        code = compile(code_text, "<string>", "exec")
-        exec(code, __main__.__dict__)
+        code = compile(
+            code_text, "<string>", "exec", 0x2000 if allow_top_level_await else 0
+        )  # ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        if code.co_flags & 0x80:  # inspect.CO_COROUTINE
+            import asyncio
+            import types
+
+            try:
+                with asyncio.Runner() as runner:
+                    runner.run(types.FunctionType(code, __main__.__dict__)())
+            except BaseException as e:
+                tb = e.__traceback__
+                while tb is not None and tb.tb_frame.f_code is not code:
+                    tb = tb.tb_next
+                if (
+                    tb is not None and e.__traceback__ is not None
+                ):  # the frames of the loop between our frame and the program's are not the program's
+                    e.__traceback__.tb_next = tb
+                raise
+        else:
+            exec(code, __main__.__dict__)
     except BaseException as e:
         err = e
     saved = None
@@ -107,3 +130,7 @@ def run(code_text):
     # the user's handler is back (a program that had none has Python's own)
     signal.signal(signal.SIGINT, signal.default_int_handler if saved is None else saved)
     return rc
+
+
+def run_async(code_text):
+    return run(code_text, True)

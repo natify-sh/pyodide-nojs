@@ -89,11 +89,11 @@ class _Loader:
 
 
 class _Hook:
-    def __init__(self, lock_path, base_url):
-        self.lock_path, self.base_url = lock_path, base_url
+    def __init__(self, name, after):
+        self.name, self.after = name, after
 
     def find_spec(self, name, path=None, target=None):
-        if name != "micropip._compat":
+        if name != self.name:
             return None
         from importlib.machinery import PathFinder
 
@@ -103,12 +103,23 @@ class _Hook:
         return spec
 
     def _patch(self, module):
-        import json
-
-        with open(self.lock_path) as f:
-            patch(module, json.load(f), self.base_url)
+        self.after(module)
         sys.meta_path.remove(self)  # only after a success: a failed import fails again the next time
 
 
+def after_import(name, after):
+    """Call `after(module)` right after the import of the module NAME (at once if it is imported already)."""
+    if name in sys.modules:
+        after(sys.modules[name])
+    else:
+        sys.meta_path.insert(0, _Hook(name, after))
+
+
 def hook(lock_path, base_url):
-    sys.meta_path.insert(0, _Hook(lock_path, base_url))
+    def after(module):
+        import json
+
+        with open(lock_path) as f:
+            patch(module, json.load(f), base_url)
+
+    after_import("micropip._compat", after)

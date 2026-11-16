@@ -64,8 +64,9 @@ EAI_FAIL = -4
 
 class Net:
     """What the guest may reach is decided by four capabilities (wasmtime's `-S` flags): `tcp` and `udp` (the sockets of
-    that type, gated at creation: no handle exists without it. The guest has no AF_UNIX, so `socketpair()` and
-    asyncio's default loop are TCP over the host's 127.0.0.1 and need `tcp`), `dns` (name lookup; numeric
+    that type, gated at creation: no handle exists without it. The guest has no AF_UNIX, so `socketpair()` is
+    a TCP pair over the host's 127.0.0.1 and needs `tcp`; asyncio's default loop has no self-pipe and needs nothing),
+    `dns` (name lookup; numeric
     addresses always resolve), `http` (the host's fetch). All off by default."""
 
     def __init__(self, guest: Guest, *, tcp: bool = False, udp: bool = False, dns: bool = False, http: bool = False):

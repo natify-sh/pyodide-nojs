@@ -103,8 +103,9 @@ class Pyodide:
     unless ``inherit_env`` passes the host's variables too, secrets included (``env`` wins; no snapshot then).
     The guest's ``/`` is a temporary folder (stdlib zip, site-packages). The network is OFF by default and the flags
     (wasmtime's ``-S`` model) switch the host's world on: ``tcp`` / ``udp`` (sockets of that type; ``socketpair()``
-    and asyncio's default loop are TCP over the host's loopback, so they need ``tcp``), ``dns`` (name lookup; numeric
-    addresses always resolve), ``http`` (the host's fetch, used by ``hostnet``), ``inherit_network`` (all of them).
+    is a TCP pair over the host's loopback, so it needs ``tcp``; asyncio's default loop needs nothing), ``dns``
+    (name lookup; numeric addresses always resolve), ``http`` (the host's fetch, used by ``hostnet``),
+    ``inherit_network`` (all of them).
     A denied socket is ``PermissionError`` (EACCES), a denied lookup ``gaierror`` EAI_FAIL, a denied fetch an
     ``OSError`` that names the flag.
 
@@ -1345,10 +1346,12 @@ class Pyodide:
                     pass
 
     # ------------------------------------------------------------------ public
-    def run(self, code: str, argv: list[str] | None = None) -> int:
+    def run(self, code: str, argv: list[str] | None = None, *, allow_top_level_await: bool = False) -> int:
         """Run Python source in the guest, in its ``__main__``: 0 if it ran, 1 if it raised (the traceback is on
         stderr; 130 for an uncaught KeyboardInterrupt, a shell's 128 + SIGINT), N for ``sys.exit(N)`` (a message or
-        None-like code as CPython's: text -> 1, None -> 0)."""
+        None-like code as CPython's: text -> 1, None -> 0).
+        ``allow_top_level_await``: the code may ``await`` at its top level (``python -m asyncio``'s rule) and runs on
+        asyncio's default loop until it is over; without it an ``await`` there is a SyntaxError."""
         if not self._started:
             self._start()
         pre = f"import sys; sys.argv = {list(argv)!r}\n" if argv is not None else ""
@@ -1356,7 +1359,7 @@ class Pyodide:
         with self._sig_lock:  # (the flags are read and written under the lock interrupt() holds: no update is lost)
             self._sig_posted = False  # only a post that comes during this run can be late for it: older ones persist
         try:
-            rc = self._call_wrapper(text)
+            rc = self._call_wrapper(text, "run_async" if allow_top_level_await else "run")
         except (
             GuestExit
         ) as e:  # the process ended (exit(), os._exit(), a signal's default action): this interpreter is gone
@@ -1399,11 +1402,14 @@ class Pyodide:
         self.net.flush_log()
         return rc
 
-    def _call_wrapper(self, text: bytes) -> int | None:
-        """``pyodide_nojs_run.run(text)`` through the C API: its status, or None if an error escaped it (cleared)."""
+    def _call_wrapper(self, text: bytes, entry: str = "run") -> int | None:
+        """``pyodide_nojs_run.<entry>(text)`` (``run`` or ``run_async``) through the C API: its status, or None if an
+        error escaped it (cleared)."""
         ex, store = self.guest.ex, self.guest.store
         n = len(text)
-        blob = text + b"\0pyodide_nojs_run\0run\0"  # the code, then the two C strings the lookup needs
+        blob = (
+            text + b"\0pyodide_nojs_run\0" + entry.encode() + b"\0"
+        )  # the code, then the two C strings the lookup needs
         buf = ex["PyMem_Malloc"](store, len(blob))
         self._wr(buf, blob)
         refs = [ex["PyUnicode_DecodeUTF8"](store, buf, n, 0)]  # strict, as the file was read

@@ -48,8 +48,8 @@ def probe(guest: Guest, *flags: str) -> dict[str, str]:
 def test_default_is_isolated(guest: Guest):
     r = probe(guest)
     assert r["tcp"] == r["tcp6"] == r["udp"] == DENIED
-    # no AF_UNIX and no native socketpair: CPython's socketpair() is a TCP pair over the host's 127.0.0.1 (so is
-    # asyncio's default loop), which is the host's network: it needs --tcp
+    # no AF_UNIX and no native socketpair: CPython's socketpair() is a TCP pair over the host's 127.0.0.1 (the host's
+    # network: it needs --tcp; asyncio's default loop no longer uses it)
     assert r["pair"] == DENIED
     assert r["numeric"] == "ok" and r["revnum"] == "ok"  # no lookup needed
     assert r["name"] == r["rev"] == "gai True"  # EAI_FAIL
