@@ -134,3 +134,10 @@ def run(code_text, allow_top_level_await=False):
 
 def run_async(code_text):
     return run(code_text, True)
+
+
+def set_argv(text):
+    """sys.argv of the next run: the arguments joined by NUL after a leading NUL (so that no argument and an empty
+    one are told apart)."""
+    sys.argv = text.split("\0")[1:]
+    return 0

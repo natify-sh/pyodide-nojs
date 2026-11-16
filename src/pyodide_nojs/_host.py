@@ -1354,11 +1354,14 @@ class Pyodide:
         asyncio's default loop until it is over; without it an ``await`` there is a SyntaxError."""
         if not self._started:
             self._start()
-        pre = f"import sys; sys.argv = {list(argv)!r}\n" if argv is not None else ""
-        text = (pre + code).encode()  # strict UTF-8, as the file it used to be written to
+        text = code.encode()  # strict UTF-8, as the file it used to be written to
         with self._sig_lock:  # (the flags are read and written under the lock interrupt() holds: no update is lost)
             self._sig_posted = False  # only a post that comes during this run can be late for it: older ones persist
         try:
+            if (
+                argv is not None
+            ):  # (not a line in front of the code: the program's line numbers and `from __future__` stay)
+                self._call_wrapper("\0".join(["", *argv]).encode(), "set_argv")  # NUL cannot be in an argument
             rc = self._call_wrapper(text, "run_async" if allow_top_level_await else "run")
         except (
             GuestExit

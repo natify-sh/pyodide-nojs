@@ -5,6 +5,7 @@ The expected values are what Pyodide 315.0.0a2 prints for the same calls."""
 
 from __future__ import annotations
 
+import pytest
 from conftest import Guest
 
 ASSERT = """
@@ -148,4 +149,18 @@ def test_the_run_leaves_no_file_in_the_guests_root(flavor: str, capfd) -> None:
         out, err = capfd.readouterr()
         assert "_pw_" not in out
         assert "FileNotFoundError" in err
-        assert 'File "<string>", line 4, in <module>' in err  # argv's line shifts it by one, as before
+        assert 'File "<string>", line 3, in <module>' in err  # argv does not shift the program's lines
+
+
+def test_argv_does_not_move_the_programs_lines(flavor: str, capfd: pytest.CaptureFixture[str]):
+    """sys.argv is set by a call of its own, not by a line put in front of the code: a traceback's line numbers are the
+    program's, a `from __future__` import stays the first statement, an empty argument stays."""
+    from pyodide_nojs import Pyodide
+
+    code = "from __future__ import annotations\nimport sys\nprint(sys.argv)\nraise ValueError('l4')\n"
+    with Pyodide(flavor) as py:
+        assert py.run(code, argv=["prog", "", "b"]) == 1
+        assert py.run("import sys; print(sys.argv)", argv=[]) == 0
+    captured = capfd.readouterr()
+    assert "['prog', '', 'b']" in captured.out and "[]" in captured.out
+    assert 'File "<string>", line 4, in <module>' in captured.err and "ValueError: l4" in captured.err
