@@ -143,8 +143,16 @@ for its sockets in our case (it passes the fd through `SSL_set_fd`, and our gues
     failed in `SSLContext(PROTOCOL_TLS_CLIENT)` with `ssl.SSLError: [SSL] malloc failure` (RAND init could not read `/dev/urandom`); since the adapter serves a virtual `/dev` with a working `urandom`, 1.1.1w creates the context with no flag (checked 2026-11-16).
   * `ssl.create_default_context()` takes 0.1 s in the guest (loads the CA bundle found by default paths: `cert_store_stats` 122 CAs here).
   * New features visible: `SSLContext.get_groups()` lists `MLKEM512/768/1024`, `X25519MLKEM768`, `SecP256r1MLKEM768`, `SecP384r1MLKEM1024`; `get_ciphers()` 17; `set_ciphersuites` works. (`set_ecdh_curve("X25519MLKEM768")` is refused by CPython's EC-curve path; hybrids go through `set_groups`, not exercised.)
-  * **Unexplained**: `ssl.get_sigalgs()` (calls `SSL_get1_builtin_sigalgs(NULL)`) **traps** with a memory fault (`wasm address 0x70000057`) inside `_ssl_get_sigalgs`
-    right after the call. Everything else I probed worked. Not diagnosed (a guess: something in the static build, e.g. a table in a function-pointer cast or the `OBJ_nid2ln` path, differs; try `-O0`, or run the same call in a native build to see if it is OpenSSL's). It must be understood before shipping.
+  * **`ssl.get_sigalgs()` trapped (explained 2026-11-16): our build flag, not OpenSSL and not CPython.** Pyodide builds CPython with `-DPY_CALL_TRAMPOLINE`
+    (`CFLAGS` of the xbuildenv's `_sysconfigdata__emscripten_wasm32-emscripten.py`), which adds a 4-byte field to `struct pyruntimestate`
+    (`_PyRuntime`, `Include/internal/pycore_runtime_structs.h`, before `static_objects`). `_ssl.c` was compiled without the macro, so its
+    view of `_PyRuntime` was 4 bytes short, and `_Py_LATIN1_CHR(':')` (an address inside `_PyRuntime`, fixed at compile time) pointed 4 bytes
+    before the real singleton: `PyUnicode_Split(s, <that>, -1)` got a fake object. Measured: the macro's address for `:`, `A`, `;`, `~` was
+    exactly 4 below the real one (`0x33e38c` against `0x33e390` for `:`). `SSL_get1_builtin_sigalgs(NULL)` itself works (26 names). With
+    `-DPY_CALL_TRAMPOLINE` added `ssl.get_sigalgs()` works on fused and dynamic with OpenSSL 3.5.9 and 3.6.2. The flags of an extension
+    compiled against the xbuildenv's headers must be those of its `CFLAGS`: take them from `_sysconfigdata`, do not write them by hand.
+    The OpenSSL 3.6.2 build (recipe of `pyodide-recipes` `packages/libopenssl`, patches 0001 getentropy and 0002 send/recv) took about 6 minutes
+    with `-j2`; `get_groups()` lists 44 groups with `MLKEM512/768/1024` and `X25519MLKEM768`.
 * **Entropy**: `--with-rand-seed=getrandom` plus `getentropy` (musl/Emscripten `getentropy` imported from the main module; the adapter answers it with WASI `random_get`: the import list of the linked `.so` has `getentropy` and no `open`/`read` of `/dev/urandom` was needed in the test above).
 * **Threads/atomics**: `no-threads` (Pyodide has one thread; recipe 3.6.2 does the same); `OPENSSL_THREADS` is still defined for CPython's header check as in `build_ssl.sh`.
 * **Imports** of the linked `.so` (`env`): 197 libc/CPython functions (`strlen`, `getentropy`, `poll`, `send`, `recv`, `stat`, `tcgetattr`, `sigaction`, `opendir`, ...) plus 19 `GOT.mem` and 3 `GOT.func`; the loader resolved all of them (the ones the guest does not have are the lazy stubs).
