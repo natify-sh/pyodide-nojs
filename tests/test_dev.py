@@ -448,3 +448,23 @@ def test_two_interpreters_have_their_own_tables(flavor, capfd):
         "['0', '1', '2', '3'] 3",
         "1 /dev/null",
     ]
+
+
+def test_closing_the_last_number_of_stdout_leaves_the_stream_for_the_devices(guest: Guest):
+    # Linux: /dev/tty and /dev/stdout still reach the terminal after close(1); the guest's own writes to 1 are EBADF.
+    # (Pyodide's FS keeps its stdout stream and prints on; Linux's answer is kept.) The report goes to stderr.
+    r = guest.run(
+        HEAD
+        + """
+import sys
+sys.stdout.flush()
+os.close(1)
+res = [err(os.fstat, 1), err(os.write, 1, b'x')]
+tty = os.open('/dev/tty', os.O_WRONLY)
+res.append(os.write(tty, b'via-tty\\n'))
+res.append(os.write(os.open('/dev/stdout', os.O_WRONLY), b'via-stdout\\n'))
+os.write(2, repr(res).encode())
+""",
+        None,
+    )
+    assert r.stderr.endswith("['EBADF', 'EBADF', 8, 11]") and "via-tty\n" in r.stdout and "via-stdout\n" in r.stdout, r

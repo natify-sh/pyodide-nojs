@@ -41,6 +41,8 @@ EXPORT("__syscall_mknodat") i32 sc_mknodat(i32 dirfd, const char *path, i32 mode
     i32 type = mode & 0170000;
     if (type != 0100000 && type != 020000 && type != 060000 && type != 010000 && type != 0140000) return -FE_INVAL;
     if (type != 0100000) return -FE_NOSYS;
+    i32 ve = vdeny(dirfd, path, 1);  // (nothing can be made under /dev or /proc)
+    if (ve) return ve;
     i32 fd = open_at(dirfd, path, 0100 | 0200 | 1, (u32)mode, 0);  // O_CREAT | O_EXCL | O_WRONLY
     if (fd < 0) return fd;
     w_fd_close(fd);  // (a WASI descriptor of ours, no guest number)

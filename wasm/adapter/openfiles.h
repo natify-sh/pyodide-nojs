@@ -522,8 +522,9 @@ EXPORT("__syscall_chdir") i32 sc_chdir(const char *path) {
 }
 
 EXPORT("__syscall_fchdir") i32 sc_fchdir(i32 fd) {
-    const char *p = fd_base_path(fd);  // a directory opened by openat
     Obj *vo = vobj(fd);
+    if (vo && vo->kind == K_FILE && !fd_isdir(fd)) return -FE_NOTDIR;  // (its recorded path may be a directory by now)
+    const char *p = fd_base_path(fd);  // a directory opened by openat
     if (!p && vo && vo->kind == K_DEV && dev_isdir(vo)) p = vo->path;  // a virtual directory
     if (p) return sc_chdir(p);
     return vobj(fd) ? -FE_NOTDIR : -FE_BADF;  // a stream, a file or a socket: not a directory

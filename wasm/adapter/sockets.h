@@ -179,6 +179,7 @@ static i32 do_poll(u8 *fds, i32 n, i32 timeout) {
     if ((u32)n > MAXFD) return -EINVAL_;  // more entries than descriptors (RLIMIT_NOFILE)
     i32 ready = 0, nsock = 0, immediate = 0;
     i32 *buf = n > 0 ? (i32 *)malloc((u32)n * 3 * 4) : 0;  // handles, events, revents of the sockets
+    if (n > 0 && !buf) return -ENOMEM;
     i32 *hs = buf, *evs = buf + n, *revs = buf + 2 * n;
     for (i32 k = 0; k < n; k++) {
         i32 fd = *(i32 *)(fds + 8 * k);

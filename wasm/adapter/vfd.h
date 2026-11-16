@@ -189,7 +189,7 @@ static i32 obj_unref(Obj *o) {
         if (mt()->norphan) meta_closing(o);
         if (o->snap) snap_free(o->snap);
         free(o->path);
-        e = w_fd_close(o->w);
+        if (!o->std) e = w_fd_close(o->w);  // (WASI 0/1/2 stay: /dev/tty, /dev/stdout, the messages and the log still write to them)
     } else if (o->kind == K_SOCK) {
         sock_close(o->w);
     } else if (o->kind == K_DEV) {
