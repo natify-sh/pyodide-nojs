@@ -457,7 +457,10 @@ def test_a_non_blocking_send_never_waits(guest: Guest, port: int):
         "print('partial:', 0 < n " + LESS + " 10_000_000, 'quick:', time.time() - t < 20)\n"
         "try:\n    while True: a.send(b'x' * 1_000_000)\nexcept BlockingIOError: print('full: EAGAIN')\n"
         "a.setblocking(True)\n"
-        "try: a.send(b'y' * 10_000_000, socket.MSG_DONTWAIT)\nexcept BlockingIOError: print('MSG_DONTWAIT: EAGAIN')\n"
+        # (a full buffer is EAGAIN on Linux; macOS may send a part of it at once: either way it did not wait)
+        "try:\n    n = a.send(b'y' * 10_000_000, socket.MSG_DONTWAIT)\n"
+        "    print('MSG_DONTWAIT: EAGAIN' if n < 10_000_000 else 'MSG_DONTWAIT: waited')\n"
+        "except BlockingIOError: print('MSG_DONTWAIT: EAGAIN')\n"
         "try: a.sendmsg([b'y' * 100], [], socket.MSG_DONTWAIT)\nexcept BlockingIOError: print('sendmsg: EAGAIN')\n"
         "b.setblocking(False)\n"
         "got = 0\n"
