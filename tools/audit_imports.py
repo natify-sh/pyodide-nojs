@@ -150,7 +150,7 @@ if __name__ == "__main__" and "--library" in sys.argv:
     wasm = (
         Path(args[1])
         if len(args) > 1
-        else Path(__file__).resolve().parent.parent / "src/pyodide_nojs/data/pyodide.asm.wasm"
+        else Path(__file__).resolve().parent.parent / "src/pyodide_nojs/data/3.15/pyodide.asm.wasm"
     )
     lib = library(Path(args[0]), wasm)
     if "--json" in sys.argv:
@@ -170,7 +170,7 @@ elif __name__ == "__main__" and "--markdown" not in sys.argv:
     wasm = (
         Path(args[1])
         if len(args) > 1
-        else Path(__file__).resolve().parent.parent / "src/pyodide_nojs/data/pyodide.asm.wasm"
+        else Path(__file__).resolve().parent.parent / "src/pyodide_nojs/data/3.15/pyodide.asm.wasm"
     )
     rows = audit(package, wasm)
     if "--json" in sys.argv:

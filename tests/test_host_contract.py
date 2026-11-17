@@ -19,7 +19,7 @@ HOST_GROUPS = (
 
 
 def host_imports(name: str) -> set[str]:
-    path = data_dir() / name
+    path = data_dir() / (name if name == "adapter.wasm" else f"3.15/{name}")
     if not path.exists():
         missing(f"{path} is not built")
     return {

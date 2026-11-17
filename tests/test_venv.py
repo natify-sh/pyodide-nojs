@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from pyodide_nojs import PYODIDE_ABI, PYVER, Pyodide, _venv
+from pyodide_nojs import PYTHONS, Pyodide, _venv
+
+PYVER = "3.15"  # the Python of these tests (tests/conftest.py)
+PYODIDE_ABI = PYTHONS[PYVER]["abi"]
 
 CP = "cp" + PYVER.replace(".", "")
 

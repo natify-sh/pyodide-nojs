@@ -12,7 +12,7 @@
 #   python_tests.yaml   the suite's list of CPython tests (Pyodide 315.0.0a2: skips, xfails, timeouts)
 # (micropip, the real _ssl and ssl.py are the package's own: data/py, data/tls; the tests need no site folder for them.)
 # Needs: node 20+ (pyodide venv; Binaryen from npm), uv, curl, network (PyPI, GitHub, jsDelivr). Idempotent: a step done is skipped.
-# The versions are the lock's (src/pyodide_nojs/data/pyodide-lock.json); pyodide-build pairs with the pinned Pyodide (as in build_ssl.sh).
+# The versions are the lock's (src/pyodide_nojs/data/3.15/pyodide-lock.json); pyodide-build pairs with the pinned Pyodide (as in build_ssl.sh).
 set -eu
 PYODIDE_BUILD=0.39.3
 HOST_PYTHON=3.15

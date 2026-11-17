@@ -3,8 +3,9 @@
 import os
 import sys
 
-# where the wheels of Pyodide's lock are (bump with the release)
-LOCK_BASE = "https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/"
+# where the wheels of Pyodide's lock are: the host's table of Pythons (`PYTHONS`), written with the other host values
+from _hostnet_slots import LOCK_BASE  # pyright: ignore[reportMissingImports]
+
 LOCK = f"/lib/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages/pyodide-lock.json"
 
 # Pyodide's _socket was built without the constant SO_REUSEADDR (musl's value is 2), which asyncio and

@@ -23,7 +23,7 @@ ALLOWED_ENV = {
 
 
 def need(name: str):
-    path = data_dir() / name
+    path = data_dir() / (name if name == "adapter.wasm" else f"3.15/{name}")
     if not path.exists():
         pytest.skip(f"{path} is not built (tools/build_data.sh)")
     return path
@@ -54,10 +54,16 @@ def test_fused_imports_only_wasi_loader_net():
 
 def test_the_package_carries_what_the_run_time_needs():
     d = data_dir()
-    for name in ("pyodide.asm.wasm", "python_stdlib.zip", "adapter.wasm", "pyodide_fused.wasm", "wasm-opt.wasm"):
+    for name in (
+        "3.15/pyodide.asm.wasm",
+        "3.15/python_stdlib.zip",
+        "adapter.wasm",
+        "3.15/pyodide_fused.wasm",
+        "wasm-opt.wasm",
+    ):
         if not (d / name).exists():
             pytest.skip(f"{d / name} is not built (tools/build_data.sh)")
-    assert available_flavors(d) == ["fused", "dynamic"]
+    assert available_flavors(d, "3.15") == ["fused", "dynamic"]
 
 
 def test_func_imports_come_from_the_module():

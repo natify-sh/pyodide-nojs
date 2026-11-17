@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 
-from wasmtime import FuncType, Module, wat2wasm
+from wasmtime import Module, wat2wasm
 
 from pyodide_nojs import _engine  # noqa: E402
 from pyodide_nojs import _wasm as R  # noqa: E402, N812  (the WAT generators and the import list)
@@ -112,14 +112,27 @@ def main(pyodide_wasm, adapter_wasm, out):
     eng = _engine.engine()
     am = Module(eng, adapter)
     imports = R.func_imports(Module(eng, main_bytes))
-    answered = {e.name for e in am.exports if isinstance(e.type, FuncType)} | {R.TRAMP}
+    adapter_sigs = R.func_exports(am)
+    answered = set(adapter_sigs) | {R.TRAMP}
+    # an import whose type differs from the adapter's export of the same name (another Pyodide build): the main module
+    # imports it under `NAME$nojs`, a wrapper in the stubs module answers it (the shim's rule: _wasm.shim_wat)
+    bad = R.signature_mismatches(imports, adapter_sigs)
+    if bad:
+        print(f"fuse.py: warning: stubs, not the adapter, answer: {R.mismatch_text(bad)}", file=sys.stderr)
+    unanswered = {b[0] for b in bad}
+    wrapped: dict[str, int] = {}  # name -> the adapter's extra trailing results
+    for m, n, ps, rs in imports:
+        extra = R.extra_results(ps, rs, *adapter_sigs[n]) if m == "env" and n in adapter_sigs else None
+        if extra and n not in unanswered:
+            wrapped[n] = extra
+    renamed = {n: f"{n}$nojs" for n in {*wrapped, *unanswered}}
     got = [i.name for i in Module(eng, main_bytes).imports if i.module == "GOT.func"]
     # a GOT.func name that the adapter exports as a function (emscripten_console_log...) would be a second export of
     # that name from `got` and lose to the adapter's: its global is merged under another name, so the import resolves
     main_renamed = rename_imports(
         main_bytes,
         {("wasi_snapshot_preview1", n): "env" for n in R.WASI_ROUTED},
-        {("GOT.func", g): GOT_PREFIX + g for g in got if g in answered},
+        {("GOT.func", g): GOT_PREFIX + g for g in got if g in answered} | {("env", n): v for n, v in renamed.items()},
     )
     renames = {
         ("env", n): "pyodide"
@@ -145,12 +158,22 @@ def main(pyodide_wasm, adapter_wasm, out):
                 )
             )
         )
+        stub_imports: list[str] = []  # imports come first in a module
         stub_lines = ["(module"]
         for m, n, ps, rs in imports:
-            if m == "env" and n not in answered:
+            if m == "env" and (n not in answered or n in renamed):
                 sig = " ".join(f"(param {p})" for p in ps) + " " + " ".join(f"(result {r})" for r in rs)
-                stub_lines.append(f'  (func (export "{n}") {sig} {R.stub_results(n, rs)})')
-        open(f"{td}/stubs.wasm", "wb").write(wat2wasm("\n".join(stub_lines + [")"])))
+                if n in wrapped:  # the adapter's export, its extra trailing results dropped
+                    aps, ars = adapter_sigs[n]
+                    asig = " ".join(f"(param {p})" for p in aps) + " " + " ".join(f"(result {r})" for r in ars)
+                    args = " ".join(f"(local.get {k})" for k in range(len(ps)))
+                    stub_imports.append(f'  (import "adapter" "{n}" (func $a_{n} {asig}))')
+                    stub_lines.append(
+                        f'  (func (export "{renamed[n]}") {sig} (call $a_{n} {args}){" drop" * wrapped[n]})'
+                    )
+                else:
+                    stub_lines.append(f'  (func (export "{renamed.get(n, n)}") {sig} {R.stub_results(n, rs)})')
+        open(f"{td}/stubs.wasm", "wb").write(wat2wasm("\n".join([stub_lines[0], *stub_imports, *stub_lines[1:], ")"])))
         open(f"{td}/got.wasm", "wb").write(
             wat2wasm(
                 "(module\n"

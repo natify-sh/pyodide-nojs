@@ -1,7 +1,7 @@
 #!/bin/sh
 # The guest's real _ssl, the official way (the one exception to "one toolchain: wasi-sdk 34", owner 2026-11-16): pyodide-build and
 # Emscripten 6.0.5, as pyodide-recipes builds its packages, with the new wasm exceptions, against a static OpenSSL 3.5.9:
-#   sh tools/build_ssl.sh WORKDIR [OUT]        OUT defaults to src/pyodide_nojs/data/tls
+#   sh tools/build_ssl.sh WORKDIR [OUT]        OUT defaults to src/pyodide_nojs/data/3.15/tls
 # OUT holds exactly _ssl.cpython-315-wasm32-emscripten.so and CPython's own Lib/ssl.py (Pyodide 314+ ships a stub _ssl and its own
 # ssl.py, which refuse handshakes). Needs: uv, curl, git, tar, network (PyPI, GitHub, python.org, storage.googleapis.com); 4 GB of disk.
 # Steps: Python 3.15 and pyodide-build in a venv; the xbuildenv and emsdk; libopenssl.a by `pyodide build-recipes` from the recipe of
@@ -28,7 +28,7 @@ for t in uv curl git tar sha256sum; do command -v "$t" >/dev/null 2>&1 || die "$
 [ -n "${1:-}" ] || die "usage: sh tools/build_ssl.sh WORKDIR [OUT]"
 H=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$1" && W=$(cd "$1" && pwd)
-OUT=${2:-$H/src/pyodide_nojs/data/tls}
+OUT=${2:-$H/src/pyodide_nojs/data/3.15/tls}
 SO=_ssl.cpython-315-wasm32-emscripten.so
 [ -f "$OUT/$SO" ] && [ -f "$OUT/ssl.py" ] && { echo "build_ssl.sh: $OUT is built"; exit 0; }
 fetch() { # URL FILE SHA256

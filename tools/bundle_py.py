@@ -1,6 +1,6 @@
 """The pure-Python packages the guest has with no `site=` (micropip and its dependency packaging), unpacked into
 DATA/py from the wheels of the release, each wheel checked against the sha256 in the release's own lock:
-    python3 tools/bundle_py.py DIST DATA
+    python3 tools/bundle_py.py DIST LOCK DATA
 """
 
 import hashlib
@@ -13,8 +13,8 @@ from pathlib import Path
 PACKAGES = ("micropip", "packaging")
 
 
-def main(dist: Path, data: Path) -> None:
-    packages = json.loads((data / "pyodide-lock.json").read_text())["packages"]
+def main(dist: Path, lock: Path, data: Path) -> None:
+    packages = json.loads(lock.read_text())["packages"]
     wheels = []
     for name in PACKAGES:
         entry = packages[name]
@@ -35,4 +35,4 @@ def main(dist: Path, data: Path) -> None:
         shutil.rmtree(cache)
 
 
-main(Path(sys.argv[1]), Path(sys.argv[2]))
+main(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))

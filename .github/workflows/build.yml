@@ -4,7 +4,7 @@ name: Build wasm
 #   wasm-opt   Binaryen 132 as wasm32-wasip1 with wasi-sdk 34 (about 12 min; cached by the hash of its script, the wasi-sdk lines of fetch.sh and the npm Binaryen version)
 #   data       pyodide.asm.wasm (exnref), python_stdlib.zip, adapter.wasm (wasi-sdk's clang), pyodide_fused.wasm, wasm-opt.wasm,
 #              pyodide-lock.json
-#   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten 6.0.5: tools/build_ssl.sh) -> data/tls; the static
+#   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten 6.0.5: tools/build_ssl.sh) -> data/3.15/tls; the static
 #              OpenSSL libraries are cached by the hash of the script (every pin is in it)
 #   testenv    numpy, cffi, the `test` package and a venv, installed by the pip of a real `pyodide venv` (uv's Python 3.15, pyodide-build, Node);
 #              openssl and python_tests.yaml (tools/prepare_testenv.sh)
@@ -107,7 +107,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: tls
-          path: src/pyodide_nojs/data/tls
+          path: src/pyodide_nojs/data/3.15/tls
 
       - name: Build the package's wasm
         run: |

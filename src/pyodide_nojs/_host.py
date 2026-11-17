@@ -31,9 +31,10 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from . import PYODIDE_ABI, _cif, _engine, _timecalc, _tty, _venv, _wasm
+from . import _cif, _engine, _timecalc, _tty, _venv, _wasm
 from ._consts import (
     BASE_ENV,
+    DEFAULT_PYTHON,
     FLAVORS,
     GLOBAL_WHY,
     GUEST,
@@ -42,6 +43,7 @@ from ._consts import (
     JS_MODULES,
     MAX_MEMORY,
     MAX_TABLE,
+    PYTHONS,
     PYVER,
     SERVICE_EXPORTS,
     SERVICES,
@@ -59,6 +61,7 @@ from ._consts import (
     guest_errno,
     override_path,
     override_warnings,
+    python_version,
     s32,
     to_wasm,
 )
@@ -74,6 +77,7 @@ log = logging.getLogger("pyodide_nojs")
 # what the package, its tools and its tests import from here
 __all__ = [
     "BASE_ENV",
+    "DEFAULT_PYTHON",
     "FLAVORS",
     "PYVER",
     "TESTENV_HINT",
@@ -91,8 +95,11 @@ class Pyodide:
     """One Python (Pyodide's CPython) in wasm, run by wasmtime.
 
     >>> py = Pyodide()                       # the dynamic build from the package's data (fused if only that is there)
+    >>> py = Pyodide(python="3.15")          # the other Python the package carries (default 3.14)
     >>> py.run("print(1 + 1)")               # 0 if the code ran, 1 if it raised (the traceback is on stderr)
 
+    ``python``: ``"3.14"`` (default) or ``"3.15"``, else ``$PYODIDE_NOJS_PYTHON``: which Pyodide release runs (the files
+    of ``data/<python>/``); every object has its own, so two Pythons can run in one process;
     ``site``: a folder (or several) copied into the guest's ``site-packages`` (a wheel unpacked...; it wins over the
     package's own ``micropip``);
     ``venv``: the root of a virtual environment made by ``pyodide venv``: its site-packages is used like one more
@@ -129,6 +136,7 @@ class Pyodide:
         self,
         flavor: str | None = None,
         *,
+        python: str | None = None,
         site: str | os.PathLike[str] | list[str | os.PathLike[str]] | None = None,
         venv: str | os.PathLike[str] | None = None,
         mounts: dict[str, str | os.PathLike[str]] | None = None,
@@ -148,11 +156,13 @@ class Pyodide:
     ) -> None:
         wt = _engine.require_wasmtime()
         self._wt = wt
+        self.python = python_version(python, venv)
         self.data = data_dir(data)
+        self.vdata = self.data / self.python  # the files that depend on the Pyodide release
         self.asm_wasm = override_path(asm_wasm, "PYODIDE_NOJS_ASM_WASM")
         self.stdlib = override_path(stdlib, "PYODIDE_NOJS_STDLIB")
         self._override_checked = False
-        have = available_flavors(self.data)
+        have = available_flavors(self.data, self.python)
         overridden = self.asm_wasm is not None or self.stdlib is not None
         if self.asm_wasm is not None and "dynamic" not in have and (self.data / "adapter.wasm").exists():
             have.append("dynamic")  # the adapter is the package's, the main module is the given one
@@ -172,21 +182,23 @@ class Pyodide:
             raise ValueError(f"flavor must be one of {FLAVORS}, not {flavor!r}")
         if flavor not in have:
             raise FileNotFoundError(
-                f"no {flavor} build in {self.data} (found: {have or 'nothing'}); see tools/build_data.sh"
+                f"no {flavor} build of Python {self.python} in {self.data} (found: {have or 'nothing'}); "
+                "see tools/build_data.sh"
             )
         self.flavor = flavor
         self.site = [site] if isinstance(site, (str, os.PathLike)) else list(site or [])
         if venv is not None:  # one more site folder, ahead of the explicit ones (those win)
             if not os.path.isdir(venv):
                 raise FileNotFoundError(f"venv folder not found: {venv}")
-            _venv.check_python(Path(venv), PYVER)
+            _venv.check_python(Path(venv), self.python)
             vsite = _venv.site_packages(Path(venv))
             self.site.insert(0, vsite)
-            if bad := _venv.foreign_wheels(vsite, PYVER, PYODIDE_ABI):
+            if bad := _venv.foreign_wheels(vsite, self.python, PYTHONS[self.python]["abi"]):
                 names = ", ".join(bad[:5]) + (f" and {len(bad) - 5} more" if len(bad) > 5 else "")
                 print(
                     f"pyodide-nojs: {venv} holds packages built for another Python or Pyodide, which will not "
-                    f"load here (Python {PYVER}, {PYODIDE_ABI}): {names}; pure-Python packages work",
+                    f"load here (Python {self.python}, {PYTHONS[self.python]['abi']}): {names}; "
+                    "pure-Python packages work",
                     file=sys.stderr,
                 )
         self.own_dirs = self._own_folders()
@@ -262,8 +274,14 @@ class Pyodide:
         them ahead of the `site=` folders, `_at_start` puts site-packages ahead of the stdlib zip's stub, `_own_key`
         keys the snapshot."""
         found = []
-        for name, build in (("tls", "tools/build_ssl.sh"), ("py", "tools/build_data.sh")):
-            d = self.data / name
+        for d, build in ((self.vdata / "tls", "tools/build_ssl.sh"), (self.data / "py", "tools/build_data.sh")):
+            name = d.name
+            if name == "tls" and self.python == "3.14" and not d.is_dir():
+                log.warning(
+                    "pyodide-nojs: Python 3.14 has no data/3.14/tls (the real _ssl is not built for it): "
+                    "`import ssl` is the stdlib zip's stub, TLS does not work"
+                )
+                continue
             if not d.is_dir():
                 raise FileNotFoundError(
                     f"the guest's {name} files are missing: no {d}; build them with `sh {build} pyo-build`"
@@ -278,17 +296,17 @@ class Pyodide:
 
     def _setup_root(self) -> None:
         self.root = root = Path(tempfile.mkdtemp(prefix="pyodide_nojs_"))
-        (root / "lib" / f"python{PYVER}" / "lib-dynload").mkdir(parents=True)  # CPython looks for it at start
+        (root / "lib" / f"python{self.python}" / "lib-dynload").mkdir(parents=True)  # CPython looks for it at start
         shutil.copy(
-            self.stdlib or self.data / "python_stdlib.zip", root / "lib" / f"python{PYVER.replace('.', '')}.zip"
+            self.stdlib or self.vdata / "python_stdlib.zip", root / "lib" / f"python{self.python.replace('.', '')}.zip"
         )
-        sp = root / "lib" / f"python{PYVER}" / "site-packages"
+        sp = root / "lib" / f"python{self.python}" / "site-packages"
         sp.mkdir()
         guest_files = sorted(g for g in GUEST.iterdir() if g.suffix in GUEST_SUFFIXES)
         for g in guest_files:  # before the site= folders: a file of the same name there wins (but not the run protocol)
             if g.name != "pyodide_nojs_run.py":
                 shutil.copy(g, sp)
-        lock = self.data / "pyodide-lock.json"  # Pyodide's package lock, for micropip (guest/pyodide_lock.py)
+        lock = self.vdata / "pyodide-lock.json"  # Pyodide's package lock, for micropip (guest/pyodide_lock.py)
         if lock.exists():
             shutil.copy(lock, sp / "pyodide-lock.json")
         for s in [
@@ -309,7 +327,7 @@ class Pyodide:
         """The fused module exports the zero/null stubs of the JavaScript bridge (the merge made them functions);
         the glue marks them `stub` and dlsym and the GOT do not see them: nor do we. Needs the pyodide.asm.wasm
         and adapter.wasm of the package (without them every export stays)."""
-        main_path, adapter_path = self.data / "pyodide.asm.wasm", self.data / "adapter.wasm"
+        main_path, adapter_path = self.vdata / "pyodide.asm.wasm", self.data / "adapter.wasm"
         if not (main_path.exists() and adapter_path.exists()):
             return
         # the names are read from 10 MB of wasm: kept in the cache dir, keyed by the two files' size and mtime
@@ -987,7 +1005,7 @@ class Pyodide:
         engine = _engine.engine()
         if not self._override_checked:
             self._override_checked = True
-            warn, detail = override_warnings(self.asm_wasm, self.stdlib, self.data)
+            warn, detail = override_warnings(self.asm_wasm, self.stdlib, self.data, self.python)
             for w in warn:
                 log.warning("pyodide-nojs: %s", w)
             for d in detail:
@@ -1027,7 +1045,7 @@ class Pyodide:
                 linker.define_func("fs", name, ty, self.guest.wrap_net(name, fn), access_caller=True)
 
         if self.flavor == "fused":
-            main_mod = _engine.load_module(self.data / "pyodide_fused.wasm")
+            main_mod = _engine.load_module(self.vdata / "pyodide_fused.wasm")
             linker = wt.Linker(engine)
             linker.define_wasi()
             self._define_exit(linker)
@@ -1043,7 +1061,7 @@ class Pyodide:
                 mods[i.module] = mods.get(i.module, 0) + 1
             self.summary = "fused: one module; its imports: " + ", ".join(f"{k} ({v})" for k, v in mods.items())
         else:
-            main_path = self.asm_wasm or self.data / "pyodide.asm.wasm"
+            main_path = self.asm_wasm or self.vdata / "pyodide.asm.wasm"
             adapter_bytes = (self.data / "adapter.wasm").read_bytes()
             _wasm.check_sections(adapter_bytes)
             adapter_mod = _engine.load_module(self.data / "adapter.wasm")
@@ -1080,8 +1098,17 @@ class Pyodide:
             if done:
                 log.warning("pyodide-nojs: %s: converted from legacy exceptions at start; cached", main_path)
             imports = _wasm.func_imports(main_mod)
+            adapter_sigs = _wasm.func_exports(adapter_mod)
+            bad = _wasm.signature_mismatches(imports, adapter_sigs)
+            if bad:
+                log.warning(
+                    "pyodide-nojs: %s: %d imports bound to stubs, the adapter's type differs: %s",
+                    main_path,
+                    len(bad),
+                    _wasm.mismatch_text(bad),
+                )
             got = [i.name for i in main_mod.imports if i.module == "GOT.func"]
-            shim_mod = wt.Module(engine, wt.wat2wasm(_wasm.shim_wat(imports, fwd, got)))
+            shim_mod = wt.Module(engine, wt.wat2wasm(_wasm.shim_wat(imports, fwd, got, adapter_sigs)))
             shim = wt.Linker(engine).instantiate(store, shim_mod).exports(store)
 
             linker = wt.Linker(engine)
@@ -1094,7 +1121,7 @@ class Pyodide:
             for m, n, _ps, _rs in imports:
                 if m == "env":
                     linker.define(store, m, n, shim[n])
-                    n_env["adapter" if n in fwd else "stub"] += 1
+                    n_env["adapter" if n in fwd and n not in {b[0] for b in bad} else "stub"] += 1
             for g in got:
                 linker.define(store, "GOT.func", g, shim["got:" + g])
             ex = _engine.LazyExports(store, linker.instantiate(store, main_mod), main_mod)
@@ -1145,13 +1172,16 @@ class Pyodide:
             self.guest.table.grow(store, 1, wt.Val.funcref(f_fetch)),
             self.guest.table.grow(store, 1, wt.Val.funcref(self.guest.ex["free"])),
         )
-        sp = self.root / "lib" / f"python{PYVER}" / "site-packages"
-        (sp / "_hostnet_slots.py").write_text(f"FETCH = {slots[0]}\nFREE = {slots[1]}\n")
+        sp = self.root / "lib" / f"python{self.python}" / "site-packages"
+        (sp / "_hostnet_slots.py").write_text(
+            f"FETCH = {slots[0]}\nFREE = {slots[1]}\nLOCK_BASE = {PYTHONS[self.python]['lock_base']!r}\n"
+        )
         log.info("[host] %s; WASI: wasmtime's own; the host's loader ops: %s", self.summary, ", ".join(loader_ops))
         self._boot(slots)
 
     def _wasi_env(self) -> list[tuple[str, str]]:
         env = dict(BASE_ENV)
+        env["LD_LIBRARY_PATH"] = f"/usr/lib:/lib/python{self.python}/site-packages"
         if self.inherit_env:
             for k, v in os.environ.items():
                 if not k or "=" in k or k in GUEST_OWN_ENV:
@@ -1182,11 +1212,11 @@ class Pyodide:
     def _snapshot_path(self) -> Path:
         mine = [p for p in (self.stdlib, self.asm_wasm) if p is not None]  # the user's: keyed by content
         files = [
-            self.stdlib or self.data / "python_stdlib.zip",
+            self.stdlib or self.vdata / "python_stdlib.zip",
             *(
-                [self.data / "pyodide_fused.wasm"]
+                [self.vdata / "pyodide_fused.wasm"]
                 if self.flavor == "fused"
-                else [self.asm_wasm or self.data / "pyodide.asm.wasm", self.data / "adapter.wasm"]
+                else [self.asm_wasm or self.vdata / "pyodide.asm.wasm", self.data / "adapter.wasm"]
             ),
         ]
 
@@ -1202,7 +1232,7 @@ class Pyodide:
                     SNAPSHOT_VERSION,
                     self.flavor,
                     [_engine.file_stamp(f.resolve(), f in mine).decode() for f in files],
-                    PYVER,
+                    self.python,
                     self.preload,
                     code_hash(Path(__file__).resolve().parent),
                     hashlib.sha256(
@@ -1213,7 +1243,7 @@ class Pyodide:
                         )
                     ).hexdigest(),
                     hashlib.sha256(f.read_bytes()).hexdigest()
-                    if (f := self.data / "pyodide-lock.json").exists()
+                    if (f := self.vdata / "pyodide-lock.json").exists()
                     else None,
                     self._wasi_env(),
                     self._own_key(),
@@ -1320,6 +1350,7 @@ class Pyodide:
         snapshot does not hold: dlopen, table slots, closures, signals, open fds, the cwd, files."""
         fresh = Pyodide(
             self.flavor,
+            python=self.python,
             env=self.env,
             inherit_env=self.inherit_env,
             data=self.data,

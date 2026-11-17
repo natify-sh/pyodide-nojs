@@ -13,8 +13,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import PYODIDE_ABI, PYODIDE_VERSION, __version__, _engine, _venv
-from ._host import FLAVORS, PYVER, TESTENV_HINT, Pyodide
+from . import __version__, _engine, _venv
+from ._consts import PYTHONS, python_version
+from ._host import FLAVORS, TESTENV_HINT, Pyodide
 
 GUEST_SIGWINCH = 28  # Linux's number, which the guest's libc has
 CWD_MOUNT = "/host"  # where --mount-cwd puts the host's current folder
@@ -163,7 +164,7 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
 
 def repl(py: Pyodide, call: Callable[..., Any]) -> int:
     """The REPL on PY, which was made with ``preload=SETUP.format(aw=...)``; CALL runs the guest (`guest_caller`)."""
-    call(py.run, BANNER.format(v=PYODIDE_VERSION))
+    call(py.run, BANNER.format(v=PYTHONS[py.python]["pyodide"]))
     assert py.root is not None
     flag = py.root / "_repl"
     read = _reader()
@@ -194,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("args", nargs=argparse.REMAINDER, help="arguments for the program (sys.argv[1:])")
     ap.add_argument(
         "--flavor", choices=FLAVORS, help="the build: fused (one module) or dynamic (adapter linked at run time)"
+    )
+    ap.add_argument(
+        "--python",
+        choices=tuple(PYTHONS),
+        help="the Python (default 3.14, or $PYODIDE_NOJS_PYTHON; with --venv the venv's)",
     )
     ap.add_argument(
         "--site", action="append", default=[], metavar="DIR", help="a folder copied into site-packages (repeatable)"
@@ -298,7 +304,9 @@ def main(argv: list[str] | None = None) -> int:
             ap.exit(2, "pyodide-nojs: error: --allow-top-level-await does not apply to -m\n")
         ns.module, rest = rest[0], rest[1:]
     if ns.version:
-        print(f"pyodide-nojs {__version__} (Pyodide {PYODIDE_VERSION}, {PYODIDE_ABI})")
+        print(f"pyodide-nojs {__version__}")
+        for ver, p in PYTHONS.items():
+            print(f"  Python {ver}: Pyodide {p['pyodide']}, {p['abi']}")
         return 0
     if ns.verbose:
         logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
@@ -321,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if not os.path.isdir(ns.venv):
                 raise FileNotFoundError(f"venv folder not found: {ns.venv}")
-            _venv.check_python(Path(ns.venv), PYVER)
+            _venv.check_python(Path(ns.venv), python_version(ns.python, ns.venv))
             _venv.site_packages(Path(ns.venv))
         except (OSError, ValueError) as exc:
             ap.error(f"--venv: {exc}")
@@ -346,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     preload = SETUP.format(aw=ns.allow_top_level_await) if code is None else None
     with Pyodide(
         flavor,
+        python=ns.python,
         site=ns.site,
         venv=ns.venv,
         mounts=mounts,

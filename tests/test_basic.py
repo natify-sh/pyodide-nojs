@@ -10,9 +10,11 @@ import pyodide_nojs as pw
 
 
 def test_versions():
-    assert pw.PYODIDE_VERSION == "315.0.0-alpha.2"
-    assert pw.PYODIDE_ABI == "pyemscripten_2026_5_wasm32"
-    assert pw.PYVER == "3.15"
+    assert pw.PYODIDE_VERSION == "314.0.7"  # the default Python's (3.14); PYTHONS has both
+    assert pw.PYODIDE_ABI == "pyemscripten_2026_0_wasm32"
+    assert pw.PYVER == pw.DEFAULT_PYTHON == "3.14"
+    assert pw.PYTHONS["3.15"]["pyodide"] == "315.0.0-alpha.2"
+    assert pw.PYTHONS["3.15"]["abi"] == "pyemscripten_2026_5_wasm32"
 
 
 def test_hello(guest: Guest):

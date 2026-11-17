@@ -18,21 +18,28 @@ def site_packages(venv: Path) -> Path:
     )
 
 
-def check_python(venv: Path, pyver: str) -> None:
-    """Raise ValueError when `pyvenv.cfg` says another Python (major.minor) than `pyver`; no file, no check."""
+def python_of(venv: Path) -> str | None:
+    """The Python (major.minor) that `pyvenv.cfg` names (`version` of `pyodide venv`, `version_info` of uv); None when
+    there is no file or no version in it."""
     cfg = venv / "pyvenv.cfg"
     if not cfg.is_file():
-        return
+        return None
     for line in cfg.read_text(encoding="utf-8", errors="replace").splitlines():
         key, _, value = line.partition("=")
         if key.strip() in ("version", "version_info"):
             m = re.match(r"\s*(\d+\.\d+)", value)
-            if m and m.group(1) != pyver:
-                raise ValueError(
-                    f"the virtual environment is for Python {m.group(1)}, this build runs Python {pyver} "
-                    f"(make it with the `pyodide` command of the matching Pyodide; see {cfg})"
-                )
-            return
+            return m.group(1) if m else None
+    return None
+
+
+def check_python(venv: Path, pyver: str) -> None:
+    """Raise ValueError when `pyvenv.cfg` says another Python (major.minor) than `pyver`; no file, no check."""
+    found = python_of(venv)
+    if found is not None and found != pyver:
+        raise ValueError(
+            f"the virtual environment is for Python {found}, this build runs Python {pyver} "
+            f"(make it with the `pyodide` command of the matching Pyodide; see {venv / 'pyvenv.cfg'})"
+        )
 
 
 def foreign_wheels(site: Path, pyver: str, abi: str) -> list[str]:

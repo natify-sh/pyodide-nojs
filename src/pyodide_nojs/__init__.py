@@ -4,8 +4,9 @@
     with Pyodide() as py:
         py.run("import sys; print(sys.version)")
 
-Compatible with exactly one Pyodide build, the one the wasm in `data/` comes from (`PYODIDE_VERSION`, Emscripten ABI
-`PYODIDE_ABI`): the adapter answers that build's `env` imports. wasmtime-py is an optional dependency (`[wasmtime]`).
+Two Pythons, each with the one Pyodide release its wasm in `data/<major.minor>/` comes from (`PYTHONS`: 3.14 is the
+default, 3.15; chosen per object: `Pyodide(python="3.15")`); one adapter answers both builds' `env` imports. wasmtime-py
+is an optional dependency (`[wasmtime]`).
 """
 
 try:
@@ -13,15 +14,18 @@ try:
 except ImportError:  # not built from a checkout with setuptools-scm
     __version__ = "0.0.0"
 
-PYODIDE_VERSION = "315.0.0-alpha.2"  # npm / GitHub tag 315.0.0a2: Python 3.15.0rc1, Emscripten 6.0.5
-PYODIDE_ABI = "pyemscripten_2026_5_wasm32"  # the platform tag of the wheels this build loads
+from ._consts import PYTHONS  # noqa: E402
+from ._host import DEFAULT_PYTHON, FLAVORS, PYVER, Pyodide, available_flavors, data_dir  # noqa: E402
 
-from ._host import FLAVORS, PYVER, Pyodide, available_flavors, data_dir  # noqa: E402
+PYODIDE_VERSION = PYTHONS[DEFAULT_PYTHON]["pyodide"]  # of the default Python; `PYTHONS` has both
+PYODIDE_ABI = PYTHONS[DEFAULT_PYTHON]["abi"]  # the platform tag of the wheels the default Python loads
 
 __all__ = [
+    "DEFAULT_PYTHON",
     "FLAVORS",
     "PYODIDE_ABI",
     "PYODIDE_VERSION",
+    "PYTHONS",
     "PYVER",
     "Pyodide",
     "__version__",

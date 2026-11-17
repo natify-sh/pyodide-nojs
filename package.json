@@ -4,7 +4,8 @@
   "description": "Build-time tools and the pinned Pyodide only: Dependabot tracks these versions. The run time has no Node (see tools/fetch.sh).",
   "license": "MIT",
   "dependencies": {
-    "pyodide": "315.0.0-alpha.2"
+    "pyodide": "315.0.0-alpha.2",
+    "pyodide-314": "npm:pyodide@314.0.7"
   },
   "devDependencies": {
     "binaryen": "132.0.0"

@@ -13,7 +13,7 @@ from conftest import Guest, check_file
 from pyodide_nojs import Pyodide, data_dir
 
 pytestmark = pytest.mark.skipif(
-    not (data_dir() / "tls").is_dir() and not os.environ.get("CI"),
+    not (data_dir() / "3.15" / "tls").is_dir() and not os.environ.get("CI"),
     reason="no data/tls (run tools/build_ssl.sh pyo-build)",
 )
 
@@ -99,7 +99,7 @@ def test_snapshot_key_follows_the_tls_files(flavor: str, tmp_path: Path):
     data = tmp_path / "data"
     shutil.copytree(data_dir(), data, symlinks=True)
     before = Pyodide(flavor, data=data, preload="x = 1\n")._snapshot_path()
-    ssl_py = data / "tls" / "ssl.py"
+    ssl_py = data / "3.15" / "tls" / "ssl.py"
     ssl_py.write_text(ssl_py.read_text() + "\n# changed\n")
     assert Pyodide(flavor, data=data, preload="x = 1\n")._snapshot_path() != before
 
@@ -108,8 +108,12 @@ def test_missing_tls_folder_is_an_error(flavor: str, tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir()
     for f in data_dir().iterdir():
-        if f.name != "tls":
+        if f.name != "3.15":
             (data / f.name).symlink_to(f.resolve())
+    (data / "3.15").mkdir()
+    for f in (data_dir() / "3.15").iterdir():
+        if f.name != "tls":
+            (data / "3.15" / f.name).symlink_to(f.resolve())
     with pytest.raises(FileNotFoundError, match=r"sh tools/build_ssl\.sh pyo-build"):
         Pyodide(flavor, data=data)
 

@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from . import _engine, _wasm
+from . import _engine, _venv, _wasm
 
 log = logging.getLogger("pyodide_nojs")
 
@@ -20,8 +20,25 @@ log = logging.getLogger("pyodide_nojs")
 Reader = Callable[[int, int], bytes]
 Writer = Callable[[int, bytes], None]
 
-PYVER = "3.14"  # the Python of the pinned Pyodide (315.0.0-alpha.2 = 3.15.0rc1)
-PYVER_FULL = "3.14.2"  # CPython's own version string, a NUL-delimited constant in the pinned pyodide.asm.wasm
+# The Pythons the package carries, by major.minor: one pinned Pyodide release each (the files of a Python are in
+# data/<major.minor>/). `full` is CPython's own version string, a NUL-delimited constant in that release's
+# pyodide.asm.wasm; `abi` the platform tag of the wheels it loads; `lock_base` where its lock's wheels are.
+PYTHONS = {
+    "3.14": {
+        "full": "3.14.2",
+        "pyodide": "314.0.7",
+        "abi": "pyemscripten_2026_0_wasm32",
+        "lock_base": "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/",
+    },
+    "3.15": {
+        "full": "3.15.0rc1",
+        "pyodide": "315.0.0-alpha.2",  # npm / GitHub tag 315.0.0a2
+        "abi": "pyemscripten_2026_5_wasm32",
+        "lock_base": "https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/",
+    },
+}
+DEFAULT_PYTHON = "3.14"
+PYVER = DEFAULT_PYTHON  # kept for importers: the default Python (the object's own is `Pyodide.python`)
 FLAVORS = ("fused", "dynamic")
 DATA = Path(__file__).resolve().parent / "data"
 GUEST = Path(__file__).resolve().parent / "guest"  # Python that runs in the guest: copied to its site-packages
@@ -37,8 +54,7 @@ BASE_ENV = [
     ("HOME", "/home/pyodide"),
     ("LANG", "en_US.UTF-8"),
     ("PYTHONINSPECT", "1"),  # set by Pyodide's JavaScript: sys.flags.inspect is 1
-    ("LD_LIBRARY_PATH", f"/usr/lib:/lib/python{PYVER}/site-packages"),
-]
+]  # and LD_LIBRARY_PATH, which names the guest's Python: `Pyodide._wasi_env`
 # What the interpreter reads at start only: removed from os.environ once it runs, as in Pyodide (which sets them in its
 # configuration). Never taken from the host's environment.
 TESTENV_HINT = " (the tests' testenv is made by `sh tools/prepare_testenv.sh pyo-build`)"
@@ -189,16 +205,29 @@ def code_hash(folder: Path) -> str:
     return hashlib.sha256(b"".join(f.name.encode() + b"\0" + f.read_bytes() for f in mods if f.is_file())).hexdigest()
 
 
+def python_version(python: str | None = None, venv: str | os.PathLike[str] | None = None) -> str:
+    """The Python to run: PYTHON, else $PYODIDE_NOJS_PYTHON, else the one VENV's `pyvenv.cfg` names (a uv venv is
+    3.14, a `pyodide venv` of the 3.15 Pyodide is 3.15), else the default; ValueError for one the package lacks."""
+    python = python or _engine.env("PYODIDE_NOJS_PYTHON")
+    if not python and venv is not None:
+        python = _venv.python_of(Path(venv))
+    python = python or DEFAULT_PYTHON
+    if python not in PYTHONS:
+        raise ValueError(f"python must be one of {tuple(PYTHONS)}, not {python!r}")
+    return python
+
+
 def data_dir(path: str | os.PathLike[str] | None = None) -> Path:
     """Where the wasm files are: PATH, else $PYODIDE_NOJS_DATA, else the package's own `data`."""
     return Path(path or _engine.env("PYODIDE_NOJS_DATA") or DATA)
 
 
-def available_flavors(data: Path) -> list[str]:
+def available_flavors(data: Path, python: str = DEFAULT_PYTHON) -> list[str]:
+    """The packagings of PYTHON in DATA (its files are in DATA/PYTHON, the adapter is DATA's)."""
     have = []
-    if (data / "pyodide_fused.wasm").exists():
+    if (data / python / "pyodide_fused.wasm").exists():
         have.append("fused")
-    if (data / "pyodide.asm.wasm").exists() and (data / "adapter.wasm").exists():
+    if (data / python / "pyodide.asm.wasm").exists() and (data / "adapter.wasm").exists():
         have.append("dynamic")
     return have
 
@@ -213,9 +242,13 @@ def override_path(path: str | os.PathLike[str] | None, var: str) -> Path | None:
     return Path(p).resolve()  # read later (the first run, a snapshot's fresh interpreter): a chdir must not move it
 
 
-def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tuple[list[str], list[str]]:
+def override_warnings(
+    asm: Path | None, stdlib: Path | None, data: Path, python: str = DEFAULT_PYTHON
+) -> tuple[list[str], list[str]]:
     """What differs in a pyodide.asm.wasm / python_stdlib.zip that is not the pinned build's: (warnings, details).
-    Reads bytes only (no compile). Pyodide's own version is not in the wasm, so CPython's version string is compared."""
+    Reads bytes only (no compile). Pyodide's own version is not in the wasm, so CPython's version string is compared.
+    PYTHON is the selected one: its release is the pinned build, its folder in DATA the known one."""
+    pyver_full = PYTHONS[python]["full"]
     warn: list[str] = []
     detail: list[str] = []
     if asm is not None:
@@ -224,9 +257,9 @@ def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tupl
         except OSError as exc:
             return [f"{asm} cannot be read: {exc.strerror or exc}"], []
         seen = sorted({m.decode() for m in re.findall(rb"\x00(3\.\d+\.\d+(?:[abc]|rc)?\d*)\x00", b)})
-        if PYVER_FULL not in seen:
+        if pyver_full not in seen:
             warn.append(
-                f"{asm} does not carry CPython {PYVER_FULL} (the pinned Pyodide's); its version strings: "
+                f"{asm} does not carry CPython {pyver_full} (the pinned Pyodide's); its version strings: "
                 f"{', '.join(seen) or 'none found'} (only CPython's version is compared: Pyodide's is not in the wasm)"
             )
         try:
@@ -234,7 +267,7 @@ def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tupl
         except (IndexError, UnicodeDecodeError, ValueError):
             warn.append(f"{asm} is not a valid wasm module (its import section cannot be read)")
             return warn, detail
-        adapter, known = data / "adapter.wasm", data / "pyodide.asm.wasm"
+        adapter, known = data / "adapter.wasm", data / python / "pyodide.asm.wasm"
         if adapter.exists() and known.exists():  # answered: by the adapter, or audited as a stub in the pinned build
             names = {n for m, n, k in _wasm.import_names(known.read_bytes()) if m == "env"}
             names |= set(_wasm.export_names(adapter.read_bytes()))
@@ -254,12 +287,12 @@ def override_warnings(asm: Path | None, stdlib: Path | None, data: Path) -> tupl
             found = ver.group(1) if ver else "?"
         except OSError as exc:
             warn.append(f"{stdlib} cannot be read: {exc.strerror or exc}")
-            found = PYVER
+            found = python
         except (StopIteration, zipfile.BadZipFile):
             found = "?"
-        if found != PYVER:
+        if found != python:
             warn.append(
-                f"{stdlib} is for Python {found} (VERSION of its sysconfigdata), the host lays out Python {PYVER}"
+                f"{stdlib} is for Python {found} (VERSION of its sysconfigdata), the host lays out Python {python}"
             )
     return warn, detail
 

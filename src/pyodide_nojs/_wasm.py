@@ -36,7 +36,7 @@ def func_imports(module):
     from wasmtime import FuncType
 
     return [
-        (i.module, i.name, [_ty(t) for t in i.type.params], [_ty(t) for t in i.type.results])
+        (i.module or "", i.name or "", [_ty(t) for t in i.type.params], [_ty(t) for t in i.type.results])
         for i in module.imports
         if isinstance(i.type, FuncType)
     ]
@@ -151,18 +151,74 @@ def stub_results(name, rs):
     return " ".join(zero(r) for r in rs)
 
 
-def shim_wat(imports, forwarded, got_names):
+def func_exports(module):
+    """{name: (params, results)} of a compiled module's function exports, from wasmtime's `Module.exports`."""
+    from wasmtime import FuncType
+
+    return {
+        e.name: ([_ty(t) for t in e.type.params], [_ty(t) for t in e.type.results])
+        for e in module.exports
+        if isinstance(e.type, FuncType)
+    }
+
+
+def extra_results(ps, rs, aps, ars):
+    """How the adapter's export (aps -> ars) answers an import (ps -> rs): the number of extra trailing i32 results it
+    returns (0: the same type), or None when the types differ otherwise. Another Pyodide build may declare a system
+    call or a time function with fewer results (`_gmtime_js`: void in 314, i32 in 315); the call then drops them."""
+    if list(ps) != list(aps) or list(ars[: len(rs)]) != list(rs):
+        return None
+    extra = ars[len(rs) :]
+    return len(extra) if all(t == "i32" for t in extra) else None
+
+
+def signature_mismatches(imports, adapter_sigs):
+    """[(name, params, results, adapter params, adapter results)]: the `env` imports that the adapter exports under
+    another type than the import's (and not just with extra trailing i32 results). They are bound as stubs."""
+    return [
+        (n, ps, rs, *adapter_sigs[n])
+        for m, n, ps, rs in imports
+        if m == "env" and n in adapter_sigs and extra_results(ps, rs, *adapter_sigs[n]) is None
+    ]
+
+
+def mismatch_text(bad):
+    """The start's warning (and the build's) for `signature_mismatches`: every name with both signatures."""
+
+    def sig(ps, rs):
+        return f"({' '.join(ps)}) -> ({' '.join(rs)})"
+
+    return "; ".join(
+        f"{n}: the main module imports {sig(ps, rs)}, the adapter has {sig(aps, ars)}" for n, ps, rs, aps, ars in bad
+    )
+
+
+def shim_wat(imports, forwarded, got_names, adapter_sigs=None):
+    """The shim's WAT. `adapter_sigs` ({name: (params, results)} of the adapter's exports) lets an import whose type
+    differs from the adapter's by extra trailing i32 results call with the adapter's type and drop them; any other
+    difference binds the stub of the import's own type (`signature_mismatches` names those)."""
+    adapter_sigs = adapter_sigs or {}
+    calls, stubbed = {}, set()  # name -> (call params, call results, results to drop)
+    for m, n, ps, rs in imports:
+        if m == "env" and n in forwarded and n in adapter_sigs and n not in LOADER:
+            extra = extra_results(ps, rs, *adapter_sigs[n])
+            if extra is None:
+                stubbed.add(n)
+            else:
+                calls[n] = (ps, adapter_sigs[n][1], extra)
+        else:
+            calls[n] = (ps, rs, 0)
     lines, types = ["(module"], {}
-    for _m, _n, ps, rs in imports:
-        key = (tuple(ps), tuple(rs))
+    for key in [(tuple(ps), tuple(rs)) for _m, _n, ps, rs in imports] + [
+        (tuple(c[0]), tuple(c[1])) for c in calls.values()
+    ]:
         if key not in types:
             types[key] = f"$t{len(types)}"
             lines.append(
-                f"  (type {types[key]} (func (param {' '.join(ps)}) (result {' '.join(rs)})))".replace(
+                f"  (type {types[key]} (func (param {' '.join(key[0])}) (result {' '.join(key[1])})))".replace(
                     "(param )", ""
                 ).replace("(result )", "")
             )
-    lines.append("  (type $tx (func (param i64 i32) (result i32)))")
     lines.append(f'  (table (export "table") {max(1, len(forwarded))} funcref)')
     for m, n, ps, rs in imports:
         if m == "wasi_snapshot_preview1" and n in WASI_ROUTED and n in forwarded:
@@ -175,12 +231,11 @@ def shim_wat(imports, forwarded, got_names):
         if m != "env" or n in LOADER:
             continue
         sig = " ".join(f"(param {p})" for p in ps) + " " + " ".join(f"(result {r})" for r in rs)
-        if n in forwarded:
+        if n in forwarded and n not in stubbed:
+            cps, crs, drop = calls[n]
             args = " ".join(f"(local.get {k})" for k in range(len(ps)))
-            if n in ("_gmtime_js", "_localtime_js") and not rs:  # EXPERIMENT 314: void import, adapter returns i32
-                body = f"(drop (call_indirect (type {types[(('i64','i32'), ('i32',))] if (('i64','i32'),('i32',)) in types else '$tx'}) {args} (i32.const {forwarded[n]})))"
-            else:
-                body = f"(call_indirect (type {types[(tuple(ps), tuple(rs))]}) {args} (i32.const {forwarded[n]}))"
+            body = f"(call_indirect (type {types[(tuple(cps), tuple(crs))]}) {args} (i32.const {forwarded[n]}))"
+            body += " drop" * drop  # the adapter's extra trailing results, on top of the import's
         else:
             body = stub_results(n, rs)
         lines.append(f'  (func (export "{n}") {sig} {body})')

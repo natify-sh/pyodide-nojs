@@ -11,6 +11,9 @@ import pytest
 
 from pyodide_nojs import FLAVORS, _engine, available_flavors, data_dir
 
+# the fixtures, the testenv (numpy, the `test` package) and the real _ssl are Python 3.15's for now: every Pyodide() and
+# every `python -m pyodide_nojs` of the tests runs it unless a test says otherwise (tests/test_versions.py)
+PYTHON = os.environ.setdefault("PYODIDE_NOJS_PYTHON", "3.15")
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
@@ -36,7 +39,7 @@ def flavor(request: pytest.FixtureRequest) -> str:
     name = request.param
     if name == "fused" and (_engine.env("PYODIDE_NOJS_ASM_WASM") or _engine.env("PYODIDE_NOJS_STDLIB")):
         pytest.skip("PYODIDE_NOJS_ASM_WASM/STDLIB replace files of the dynamic build; the fused module cannot follow")
-    if name not in available_flavors(data_dir()):
+    if name not in available_flavors(data_dir(), PYTHON):
         missing(f"the {name} build is not in {data_dir()}")
     return name
 
