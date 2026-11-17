@@ -15,7 +15,7 @@ from pyodide_nojs import Pyodide, data_dir
 
 pytestmark = pytest.mark.skipif(
     not (data_dir() / PYTHON / "tls").is_dir() and not os.environ.get("CI"),
-    reason="no data/tls (run tools/build_ssl.sh pyo-build)",
+    reason="no data/<ver>/tls (run tools/build_ssl.sh pyo-build <ver>)",
 )
 
 

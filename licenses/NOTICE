@@ -2,7 +2,7 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
 
 * data/<ver>/pyodide.asm.wasm, python_stdlib.zip, pyodide_fused.wasm (which contains pyodide.asm.wasm), for two Pythons: Pyodide 314.0.7 (3.14) and 315.0.0-alpha.2 (3.15),
   MPL-2.0 (Pyodide-LICENSE-MPL-2.0.txt). Pyodide's CPython is under the PSF license (CPython-LICENSE-PSF.txt); the
-  Emscripten runtime (6.0.5 in the 3.15 build; 5.0.3 is the one of the 3.14 xbuildenv, not checked in the 3.14 main module; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
+  Emscripten runtime (6.0.5 in the 3.15 build; 5.0.3 is the one of the 3.14 lock (`platform: emscripten_5_0_3`) and xbuildenv, not checked in the 3.14 main module itself; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
   (MIT: musl-COPYRIGHT-MIT.txt) compiled into pyodide.asm.wasm. The files are
   Pyodide's own, with the legacy wasm exceptions converted to exnref (Binaryen 132), and pyodide.asm.wasm also has one patch: libc's
   `setsockopt` stub is turned into an import (tools/patch_main.mjs); fused is also merged with adapter.wasm.
@@ -13,8 +13,8 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
   are in the public domain and have no text).
 * data/<ver>/pyodide-lock.json: the package lock of the same Pyodide release (MPL-2.0, as above; JSON data, unchanged), from the
   release's files (npm `pyodide` 314.0.7 and 315.0.0-alpha.2, tools/fetch.sh).
-* data/py/ (micropip 0.11.1 and packaging 26.1, unpacked unchanged from the wheels of the same Pyodide release, whose sha256 are checked
-  against the lock by tools/bundle_py.py): micropip is MPL-2.0 (its LICENSE is the same text as Pyodide-LICENSE-MPL-2.0.txt; micropip also
+* data/py/ (micropip 0.11.1 and packaging 26.1, unpacked unchanged from the wheels of the 3.15 release (315.0.0-alpha.2) and used for both Pythons, whose sha256 are checked
+  against the 3.15 lock by tools/bundle_py.py; the 3.14 release has the same two versions, and its unpacked wheels differ only in the dist-info files of packaging): micropip is MPL-2.0 (its LICENSE is the same text as Pyodide-LICENSE-MPL-2.0.txt; micropip also
   vendors a copy of packaging under micropip/_vendored/packaging); packaging is Apache-2.0 OR BSD-2-Clause (packaging-LICENSE-Apache-2.0.txt,
   packaging-LICENSE-BSD-2-Clause.txt, from the wheel's dist-info/licenses). Source: https://github.com/pyodide/micropip, https://github.com/pypa/packaging
 * wasm-opt.wasm: Binaryen version_132 built for wasm32-wasip1 with wasi-sdk 34 (tools/build_binaryen.sh), Apache-2.0

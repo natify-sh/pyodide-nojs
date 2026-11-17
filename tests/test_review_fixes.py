@@ -194,7 +194,7 @@ import _pyodide_core
 """
 # Pyodide's own values (the real 315.0.0a2 on Node: executable and orig_argv are the script's path there, the web has
 # Emscripten's default thisProgram "./this.program")
-# except sys.path: site-packages is ahead of the zip, so that the real _ssl of data/tls wins
+# except sys.path: site-packages is ahead of the zip, so that the real _ssl of data/<ver>/tls wins
 STARTUP_WANT = [
     "/home/pyodide/this.program /home/pyodide/this.program ['./this.program'] ['']",
     f"['', '{LIB}/site-packages', '{ZIP}'] {ZIP} /home/pyodide []",
@@ -339,7 +339,7 @@ print(stat.S_ISCHR(os.fstat(1).st_mode))
 
 def test_site_folders_come_before_the_stdlib_zip(guest: Guest, tmp_path: Path) -> None:
     """Regression: a `site=` folder's real `_ssl` lost to the stub `_ssl.py` of the stdlib zip when site-packages
-    was last. site-packages is always ahead of the zip (also without `site=`: data/tls)."""
+    was last. site-packages is always ahead of the zip (also without `site=`: data/<ver>/tls)."""
     (tmp_path / "colorsys.py").write_text("MARK = 'from the site folder'\n")
     code = "import sys, colorsys; print(sys.path[1:3]); print(getattr(colorsys, 'MARK', None))"
     r = guest.run(code, None, "--site", str(tmp_path))

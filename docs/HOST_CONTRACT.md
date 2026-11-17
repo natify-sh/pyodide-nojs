@@ -7,7 +7,7 @@ built wasm by `tests/test_host_contract.py`: every `loader`, `net`, `fs` and `au
 
 How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the built wasm of the pinned Pyodide and the adapter of that day):
 
-* **imports and signatures**: `Module(...).imports` of `src/pyodide_nojs/data/{pyodide_fused,adapter,pyodide.asm}.wasm` (wasmtime-py), counted by module; the signature columns below were compared with that list (all 38 match). The counts of the imports of the main module (264 `env`, 14 WASI, 280 `GOT.func`) are 3.15's: 3.14's main module has 254 `env` imports, and its fused module imports 69 (the `net` operations are 18), the adapter being the same file.
+* **imports and signatures**: `Module(...).imports` of `src/pyodide_nojs/data/{pyodide_fused,adapter,pyodide.asm}.wasm` (wasmtime-py), counted by module; the signature columns below were compared with that list (all 38 match). The counts of the imports of the main module (264 `env`, 14 WASI, 280 `GOT.func`) are 3.15's: 3.14's main module has 255 `env` imports (254 in Pyodide's release, the package's has the `setsockopt` patch's one more; `GOT.func` 280 and 14 WASI as in 3.15), and its fused module imports 69 (the `net` operations are 18), the adapter being the same file.
 * **calls at run time**: a throw-away script (not in the repo) that wrapped every `loader`/`net`/`fs` function of `Pyodide._ops()` with a counter and ran `Pyodide(flavor=...).run(...)`; same result on both packagings (run again on 2026-11-16 for the two programs of section 4).
 * **the real Pyodide under Node** (section 4): counting wrappers around the glue's `wasmImports` of Pyodide 315.0.0-alpha.2, 2026-11-15; the script is not in the repository and the numbers were not re-measured here. The sizes of the host (section 5) are `wc -l` of the same day and of 2026-11-16.
 
@@ -37,11 +37,11 @@ How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the
 | `<ver>/tls/` | both | the guest's real `_ssl` (OpenSSL 3.5.9) and CPython's `ssl.py`, copied into the guest's site-packages (`tools/build_ssl.sh`); a missing folder is a `FileNotFoundError` |
 | `py/` | both | `micropip` and `packaging`, copied into the guest's site-packages (`tools/build_data.sh`); a missing folder is a `FileNotFoundError` |
 
-Python files of the guest (`src/pyodide_nojs/guest/`, about 620 lines by `wc -l src/pyodide_nojs/guest/*` of 2026-11-16: `hostnet.py`, `pyodide_lock.py`, `pyodide_nojs_asyncio.py`, start and run, and the `.pth`) run inside the guest.
+Python files of the guest (`src/pyodide_nojs/guest/`, 622 lines by `wc -l src/pyodide_nojs/guest/*` of 2026-11-17: `hostnet.py`, `pyodide_lock.py`, `pyodide_nojs_asyncio.py`, start and run, and the `.pth`) run inside the guest.
 
 ## 2. WASI
 
-The fused module has 71 imports: 33 `wasi_snapshot_preview1`, 19 `net`, 16 `loader`, 3 `fs` (measured). `proc_exit` is
+The fused module of 3.15 has 71 imports: 33 `wasi_snapshot_preview1`, 19 `net`, 16 `loader`, 3 `fs` (measured; 3.14's has 69: 32, 18, 16, 3). `proc_exit` is
 imported twice (the main module's and the adapter's), so 32 distinct WASI functions.
 
 **Taken from wasmtime itself** (`Linker.define_wasi()`, no host code): all of them except `proc_exit`:
@@ -156,12 +156,12 @@ host's DNS and its trust store are the OS's facts.
 | group | count | who answers |
 |---|---|---|
 | `env` imports of `adapter.wasm` (11) | `memory`, `__indirect_function_table`, `__stack_pointer`, `__memory_base`, `__table_base`, `malloc`, `calloc`, `free`, `getentropy`, `emscripten_builtin_memalign`, `_emscripten_find_dylib` | the main module's own exports and globals, linked by the host (checked by `tests/test_shape.py`) |
-| `env` imports of `pyodide.asm.wasm` | 264 declared; 91 are exports of `adapter.wasm` by name, 173 not (stubs in the shim: 169 JavaScript bridge and hooks, 3 epoll calls answered ENOSYS, and the trampoline, which is WAT; the per-import list is `docs/IMPORT_AUDIT.md`) | the adapter through the shim's `call_indirect` table; the rest return 0/null |
+| `env` imports of `pyodide.asm.wasm` (3.15's) | 264 declared; 91 are exports of `adapter.wasm` by name, 173 not (stubs in the shim: 169 JavaScript bridge and hooks, 3 epoll calls answered ENOSYS, and the trampoline, which is WAT; the per-import list is `docs/IMPORT_AUDIT.md`) | the adapter through the shim's `call_indirect` table; the rest return 0/null |
 | `GOT.func` imports of `pyodide.asm.wasm` | 280 | globals in the shim (277 of them `emscripten_gl*`, `console_*`, `out`, `err`, pulled in by Pyodide's link line with `-lGL -legl.js -lwebgl.js -lhtml5.js -lsdl.js`: no use for a server host) |
 | WASI of `pyodide.asm.wasm` | 14 | section 2 |
 
 All of these are wasm or engine plumbing in `_start`; nothing in the table is a new host function. The fused module has
-none of them: it has exactly the 71 imports of section 2 and 3.
+none of them: it has exactly the 71 (3.14: 69) imports of section 2 and 3.
 
 ## 4. Boot versus the long tail
 
@@ -202,9 +202,9 @@ functions above and how many the adapter answers on its own.
 
 Sizes, on 2026-11-15: the host's Python was 3,802 lines (`src/pyodide_nojs/*.py`, 170 KB) against the adapter's
 4,183 lines of C (181 KB), the guest-side Python 443 lines; about 2,300 lines of the host are engine/OS primitives and about
-850 are pure logic that could live in the adapter. `wc -l` of 2026-11-16 gives more (the code has grown since): about 4,460 lines
-for `src/pyodide_nojs/*.py`, about 4,300 for `wasm/adapter.c` and `wasm/adapter/*.h`, about 620 for `guest/*`. The line
-counts per file below are `wc -l` of 2026-11-16 (`_host.py`, about 1,490 lines, includes the engine glue).
+850 are pure logic that could live in the adapter. `wc -l` of 2026-11-17 gives more (the code has grown since): 4,610 lines
+for `src/pyodide_nojs/*.py`, 4,310 for `wasm/adapter.c` and `wasm/adapter/*.h`, 622 for `guest/*`. The line
+counts per file below are `wc -l` of 2026-11-17 (`_host.py`, 1,514 lines, includes the engine glue).
 
 | piece | lines | what it is | state |
 |---|---|---|---|
@@ -212,8 +212,8 @@ counts per file below are `wc -l` of 2026-11-16 (`_host.py`, about 1,490 lines, 
 | `_sockaddr.py` | 326 | option/flag/error tables, sockaddr/msghdr/send/recv helpers, `getaddrinfo`/`getnameinfo` result building, `ca_bundle` | tables and layouts: logic; the OS calls stay |
 | `_timecalc.py` | 171 | the calendar and JS date helpers, `t_localtime`/`t_mktime`/`t_tzset` shapes, the CPU clocks | the calendar is logic; the offset of a zone and the CPU time are the OS's |
 | `_tty.py` | 257 | termios and window size translated between the host's numbers and Linux's | tables are logic; the termios calls are the OS's |
-| the loader's error texts (`_host.py`: `_DL_WHY`, `_dl_error`) | part of about 1,490 | V8's wording for the `dlerror` text of a failed link (compile errors and traps carry wasmtime's text) and `__dl_seterr` | movable, see `loader.error` |
-| `_dl_sym`, `_dl_call`, `_dl_scope` bookkeeping (`_host.py`) | part of about 1,490 | the host's per-instance exports and scopes | movable only together, see `loader.sym` |
+| the loader's error texts (`_host.py`: `_DL_WHY`, `_dl_error`) | part of 1,514 | V8's wording for the `dlerror` text of a failed link (compile errors and traps carry wasmtime's text) and `__dl_seterr` | movable, see `loader.error` |
+| `_dl_sym`, `_dl_call`, `_dl_scope` bookkeeping (`_host.py`) | part of 1,514 | the host's per-instance exports and scopes | movable only together, see `loader.sym` |
 | `_net.fetch` (HTTP by `urllib`) | part of 542 (`_net.py`) | the host's HTTP(S) for `--pyfetch`: the host's proxies, DNS and trusted roots (the guest has its own `_ssl`) | stays as the opt-in route; an OS fact, not movable |
 
 What stays in the host is what needs the engine or the OS: instantiate, globals, tags, exports, creating a function

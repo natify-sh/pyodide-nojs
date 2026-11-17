@@ -100,12 +100,12 @@ uv sync                                                    # dev environment (ad
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
 sh tools/build_data.sh pyo-build                                # the wasm of the package -> src/pyodide_nojs/data (needs node, npm; cmake + ninja for wasm-opt.wasm)
-sh tools/build_ssl.sh pyo-build 3.14|3.15                       # the guest's real _ssl + ssl.py for one Python (OpenSSL 3.5.9; pyodide-build, Emscripten 5.0.3 / 6.0.5; needs uv, network, 4 GB) -> src/pyodide_nojs/data/<ver>/tls
-sh tools/prepare_testenv.sh pyo-build                           # numpy, cffi/pycparser, the `test` package and a venv via `pyodide venv` and its pip (needs node, uv, network); openssl 1.1.1w (the ctypes test), python_tests.yaml -> pyo-build/testenv (micropip and the real _ssl are the package's own: data/py, data/<ver>/tls)
-uv run pytest -m "not network and not suite"               # offline, both packagings
+sh tools/build_ssl.sh pyo-build 3.14|3.15                       # the guest's real _ssl + ssl.py for one Python (OpenSSL 3.5.9; pyodide-build, Emscripten 5.0.3 / 6.0.5; needs uv, network, 4 GB) -> src/pyodide_nojs/data/<ver>/tls (works in pyo-build/<ver>)
+sh tools/prepare_testenv.sh pyo-build [3.14|3.15]               # (both Pythons without the argument) numpy, cffi/pycparser, the `test` package and a venv via `pyodide venv` and its pip (needs node, uv, network); openssl 1.1.1w (the ctypes test), python_tests.yaml -> pyo-build/testenv/<ver> (micropip and the real _ssl are the package's own: data/py, data/<ver>/tls)
+uv run pytest -m "not network and not suite"               # offline, both packagings; the guest's Python is 3.14, or $PYODIDE_NOJS_PYTHON=3.15 (tests/conftest.py)
 uv run pytest -m network                                   # PyPI and jsDelivr
 uv run pytest -m suite                                     # Pyodide's official CPython suite, both packagings (long; -n auto spreads it over the cores; PYODIDE_SUITE_SHARD=I/N, PYODIDE_SUITE_FLAVORS=fused)
 uv run python -m pyodide_nojs [--python 3.14|3.15] [--flavor fused|dynamic] -c "print(1 + 1)"
 uv build --wheel                                           # the wheel carries data/
 ```
-CI: `build.yml` (wasm-opt.wasm cached, data, testenv), `tests.yml` (offline on Linux/Windows/macOS, network, the suite in one job per packaging, spread over the cores by pytest-xdist), `pre-commit.yml`, `publish.yml` (on a tag: builds the wheel and attaches it to the GitHub release; PyPI publishing is commented out while this is an alpha; wheel only: the wasm is built, not committed).
+CI: `build.yml` (wasm-opt.wasm cached, each Python's `_ssl`, data, a testenv per Python), `tests.yml` (offline on Linux/Windows/macOS against guest Python 3.14 and on Linux also against 3.15; network: one job per guest Python; the suite: one job per packaging and Python, spread over the cores by pytest-xdist), `pre-commit.yml`, `publish.yml` (on a tag: builds the wheel and attaches it to the GitHub release; PyPI publishing is commented out while this is an alpha; wheel only: the wasm is built, not committed).

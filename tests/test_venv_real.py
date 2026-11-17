@@ -1,4 +1,4 @@
-"""Offline: a real `pyodide venv` (testenv/venv, from tools/prepare_testenv.sh): `six` and numpy, pip-installed."""
+"""Offline: a real `pyodide venv` (testenv/<ver>/venv, by tools/prepare_testenv.sh): `six` and numpy, pip-installed."""
 
 from __future__ import annotations
 

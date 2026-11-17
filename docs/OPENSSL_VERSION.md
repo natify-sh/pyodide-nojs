@@ -51,7 +51,7 @@
 ## 3. What was built and measured
 
 The shipped builds: `_ssl.cpython-315-wasm32-emscripten.so` with a static OpenSSL 3.5.9, **4,057,787 bytes** (`ls -l src/pyodide_nojs/data/3.15/tls/`),
-loaded by `pyodide.asm.wasm` through the ordinary `dlopen`; the main module does not change (9,995,716 bytes). For 3.14 the same recipe gives `_ssl.cpython-314-wasm32-emscripten.so`, **4,052,221 bytes** (`ls -l src/pyodide_nojs/data/3.14/tls/`; the 3.14 main module is 9,611,363 bytes). The sections above are about 315's lock; `get_sigalgs()` and `get_groups()` exist only in 3.15's `ssl.py`. The tests below ran for 3.15; `tests/test_tls.py` runs per Python (3.14's network test was not run: the sandbox has no DNS). It passes on both packagings: a TLS
+loaded by `pyodide.asm.wasm` through the ordinary `dlopen`; the main module does not change (9,995,716 bytes). For 3.14 the same recipe gives `_ssl.cpython-314-wasm32-emscripten.so`, **4,052,221 bytes** (`ls -l src/pyodide_nojs/data/3.14/tls/`; the 3.14 main module is 9,611,363 bytes). The sections above are about 315's lock; `get_sigalgs()` and `get_groups()` exist only in 3.15's `ssl.py`. The measurements below were made for 3.15; `tests/test_tls.py` runs per Python, and the `network checks / Pyodide 3.14` and `/ Pyodide 3.15` jobs of CI run 44136219856 passed (22 tests each, job ids 134320445707 and 134320446324). It passes on both packagings: a TLS
 1.3 handshake to pypi.org, a local TLS server with a hostname refusal (`ssl.SSLCertVerificationError: Hostname mismatch`), `urllib`, `micropip`
 (`tests/test_tls.py`, `tests/checks/tls_check.py`). With no `/dev/urandom` of the host: OpenSSL seeds from `getentropy`.
 
@@ -105,4 +105,4 @@ Pyodide's own recipes tree and the seam with their build and tests; a PR without
   of the 1.1.1w recipe was not read, so "why 1.1.1" is not established beyond what is quoted.
 * Whether Pyodide will accept it; whether the same side module loads in Pyodide's own browser and Node builds (only our loader was tried); AWS-LC
   (not built); shared `libssl.so` + `libcrypto.so` (not built; needs an export list of the OpenSSL API); the complete `test_ssl` of CPython against
-  the 3.5.9 build (the official suite runs it: 15 tests that start a threaded server are skipped, the guest has no threads).
+  the 3.5.9 build (the official suite runs it: 15 tests on 3.15, 12 on 3.14, that start a threaded server are skipped, the guest has no threads).

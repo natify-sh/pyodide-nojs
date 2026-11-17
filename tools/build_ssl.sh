@@ -5,7 +5,7 @@
 #   sh tools/build_ssl.sh WORKDIR PYVER [OUT]  PYVER 3.14 or 3.15; OUT defaults to src/pyodide_nojs/data/PYVER/tls
 # OUT holds exactly _ssl.cpython-3NN-wasm32-emscripten.so and CPython's own Lib/ssl.py (Pyodide 314+ ships a stub _ssl and its own
 # ssl.py, which refuse handshakes). One _ssl.so serves one Python only (3.15's needs C API that 3.14 lacks). Needs: uv, curl, git, tar, network (PyPI, GitHub, python.org, storage.googleapis.com); 4 GB of disk.
-# Steps: Python 3.15 and pyodide-build in a venv; the xbuildenv and emsdk; libopenssl.a by `pyodide build-recipes` from the recipe of
+# Steps: the Python of the pin (HOST_PYTHON) and pyodide-build in a venv; the xbuildenv and emsdk; libopenssl.a by `pyodide build-recipes` from the recipe of
 # pyodide-recipes at a pinned commit (version and checksum edited, patch 0001 dropped: 3.5.9 has getentropy); then _ssl.c in two emcc calls
 # with the flags the xbuildenv's own CPython was built with. Idempotent: every step is skipped when its result is there.
 # A bump of Pyodide/Python moves PYODIDE_BUILD, XBUILDENV, EMSCRIPTEN, CPYTHON_* together (CLAUDE.md).

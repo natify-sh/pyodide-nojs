@@ -10,7 +10,7 @@
 #   venv         a pyvenv.cfg (its version line only: the real one holds absolute paths) and site-packages of the venv with six and numpy as pip installs them (no bin/: no symlinks and no absolute
 #                paths, so the CI artifact keeps it): what `--venv` needs                                  test_venv_real.py
 #   python_tests.yaml   the suite's list of CPython tests (of that Pyodide release: skips, xfails, timeouts)
-# (micropip, the real _ssl and ssl.py are the package's own: data/py, data/tls; the tests need no site folder for them.)
+# (micropip, the real _ssl and ssl.py are the package's own: data/py, data/<ver>/tls; the tests need no site folder for them.)
 # Needs: node 20+ (pyodide venv; Binaryen from npm), uv, curl, network (PyPI, GitHub, jsDelivr). Idempotent: a step done is skipped.
 # The versions are the lock's (src/pyodide_nojs/data/PYVER/pyodide-lock.json); pyodide-build pairs with the pinned Pyodide (as in build_ssl.sh).
 set -eu

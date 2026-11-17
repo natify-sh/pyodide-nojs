@@ -105,7 +105,7 @@ class Pyodide:
     ``venv``: the root of a virtual environment made by ``pyodide venv``: its site-packages is used like one more
     ``site`` folder (the explicit ones win); another Python is a ``ValueError``, wheels of another Pyodide a warning;
     The guest's ``ssl`` is always the real one: ``_ssl`` (OpenSSL 3.5.9) and CPython's own ``ssl.py`` from the
-    package's ``data/tls`` (``tools/build_ssl.sh``), copied into ``site-packages`` ahead of the stdlib zip's stub;
+    package's ``data/<ver>/tls`` (``tools/build_ssl.sh``), copied into ``site-packages`` ahead of the stdlib zip's stub;
     ``micropip`` and ``packaging`` are the package's too (``data/py``).
     ``mounts``: ``{guest path: host folder}`` preopened as they are (the guest can write there);
     ``env``: more environment variables.
@@ -269,7 +269,7 @@ class Pyodide:
 
     # ------------------------------------------------------------------ the guest's root
     def _own_folders(self) -> list[Path]:
-        """The package's own folders for the guest's site-packages: the real `_ssl` and `ssl.py` (`data/tls`,
+        """The package's own folders for the guest's site-packages: the real `_ssl` and `ssl.py` (`data/<ver>/tls`,
         `tools/build_ssl.sh`) and `micropip` with `packaging` (`data/py`, `tools/bundle_py.py`). `_setup_root` copies
         them ahead of the `site=` folders, `_at_start` puts site-packages ahead of the stdlib zip's stub, `_own_key`
         keys the snapshot."""

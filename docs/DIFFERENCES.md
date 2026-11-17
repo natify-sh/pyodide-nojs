@@ -1,6 +1,6 @@
 # Differences from Pyodide
 
-What answers differently here than in the real Pyodide 315.0.0-alpha.2 on Node (MEMFS), and why (the probes were run for 3.15 only; 3.14 runs on the same adapter and was not compared with Pyodide 314). It was made by running the same
+What answers differently here than in the real Pyodide 315.0.0-alpha.2 on Node (MEMFS), and why (the probes were run for 3.15 only; 3.14 runs on the same adapter and was compared with Pyodide 314.0.7 only in the cases of the section on Python 3.14 below). It was made by running the same
 probe programs on both and reading the diff: about 5,700 cases of files and descriptors, 2,750 of the loader, `mmap`, the standard
 streams and `poll`, and about 7,500 per time-zone run of the runtime (time functions: no difference in 7 time zones). Fused and dynamic gave the same answers on
 every probe. Most of what the probes found is fixed and kept by a test; this file lists what is still different. The per-import
@@ -45,7 +45,7 @@ Pyodide's defects are not copied: chosen on purpose.
 | `system()` | `ENOSYS` (a shell of the host would be a way out of the sandbox); the 3 `epoll` calls are `ENOSYS` as in Pyodide | |
 | no JavaScript | `js`, `pyodide.ffi`, `JsProxy`/`PyProxy`, `loadPackage` from JS do not exist; the 169 bridge and hook imports are zero/null stubs, hidden from `dlsym` and the GOT | the bridge needs JavaScript |
 | `emscripten_dlopen`'s callback | runs right after the call returns, not on the event loop | chosen on purpose; the alternative is in `BRIEF.md` |
-| `sys.executable`, `len(sys.modules)` at start | `/home/pyodide/this.program` as in the browser (on Node it is a script path); 84 modules against Pyodide's 197 | no JavaScript start-up code |
+| `sys.executable`, `len(sys.modules)` at start | `/home/pyodide/this.program` as in the browser (on Node it is a script path); 85 modules on 3.15 and 92 on 3.14 against Pyodide 315's 197 | no JavaScript start-up code |
 
 ## Open
 
@@ -65,6 +65,19 @@ Pyodide's defects are not copied: chosen on purpose.
 | `/home` | `pyodide` only | `pyodide` and `web_user` |
 | a program that ends with all 4,093 descriptor numbers in use | fails in the wrapper (status 255) | runs |
 | Python 3.13 (Pyodide 313) | not covered (its main module lacks 32 of 3.15's imports and has another trampoline mechanism) | runs its own |
+
+## Python 3.14 against Pyodide 314.0.7 (on Node)
+
+Python 3.14 answers as Pyodide 314.0.7 wherever Pyodide 314's main module differs from 315's, except for two answers, which are the adapter's own (the same as on 3.15):
+
+| what | Pyodide 314.0.7 | here (3.14) | test |
+|---|---|---|---|
+| an empty path with a descriptor that is no directory (`os.stat('', dir_fd=99)`, `os.open('', os.O_RDONLY, dir_fd=99)`) | `EBADF`: the descriptor is looked at first | `ENOENT`: the path is looked at first (Linux's) | `tests/test_paths_errno.py::test_the_empty_path_is_enoent_in_every_call` (leaves the bad-descriptor case out for 3.14) |
+| `select.poll()` on a number that is no descriptor (`p.register(99, POLLIN); p.poll(0)`) | no entry (`[]`) | `POLLNVAL`: `[(99, 32)]` | `tests/test_descriptors.py::test_numbers_that_are_no_descriptor_are_ebadf_whatever_the_value` |
+
+Measured with `node` on `pyo-build/dl/dist-314` (Pyodide 314.0.7: `EBADF`, `EBADF`, `[]`) and with `uv run python -m pyodide_nojs --python 3.14 --flavor fused|dynamic` (`ENOENT`, `[(99, 32)]` on both).
+
+The same as in real Pyodide 314 (so not differences of this package, but unlike 3.15 here): its main module has no `__syscall_shutdown`, `__syscall_linkat`, `__syscall_pipe2` or `__syscall_epoll_*`, so `socket.shutdown` is `ENOSYS`, `link()` is `EMLINK`, there are no `epoll` syscalls (`select.epoll` does not exist in either CPython), and the flags of `pipe2` are lost (`O_CLOEXEC`; other flags give 28: `tests/test_descriptors.py`, `tests/test_sockets.py`, `tests/test_files.py`, `tests/test_dev.py`); `os.pipe()` goes through `__syscall_pipe`, which the adapter answers as `pipe2` with no flags; a negative number given to `os.listdir`, `os.chdir` and `os.utime` is a path or no error, not `EBADF` (the test records it as "as the real Pyodide 314, measured"); `_gmtime_js` and `_localtime_js` have no result, so `time.gmtime(9e12)` is `(1900, 1, 0, 0, 0, 0, 6, 1, 0)` (3.15: `OSError` 28; `tests/test_time.py`). The macOS answer of `test_poll_reports_a_hang_up` for 3.14 is what the macOS CI run showed.
 
 ## Where Pyodide dies and the guest answers
 
