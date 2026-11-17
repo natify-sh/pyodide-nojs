@@ -66,6 +66,11 @@ for dir_fd in (None, dfd, 99) if sys.version_info >= (3, 15) else (None, dfd):
     assert err(os.rmdir, '', **kw) == 'ENOENT', dir_fd
     rkw = {} if dir_fd is None else {'src_dir_fd': dir_fd, 'dst_dir_fd': dir_fd}
     assert err(os.rename, '', 'x', **rkw) == 'ENOENT', dir_fd
+if sys.version_info < (3, 15):
+    # ours on 3.14 is ENOENT; real Pyodide 314.0.7 gives EBADF (measured on Node, docs/DIFFERENCES.md): this records the
+    # accepted difference and fails if it changes
+    assert err(os.stat, '', dir_fd=99) == 'ENOENT'
+    assert err(os.open, '', os.O_RDONLY, dir_fd=99) == 'ENOENT'
 assert err(os.open, '', os.O_RDWR | os.O_CREAT) == 'ENOENT'
 assert err(os.rename, 'f', '') == 'ENOENT' and err(os.symlink, 'f', '') == 'ENOENT'
 assert err(os.truncate, '', 0) == 'ENOENT'

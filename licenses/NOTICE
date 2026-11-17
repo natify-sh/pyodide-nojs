@@ -2,7 +2,7 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
 
 * data/<ver>/pyodide.asm.wasm, python_stdlib.zip, pyodide_fused.wasm (which contains pyodide.asm.wasm), for two Pythons: Pyodide 314.0.7 (3.14) and 315.0.0-alpha.2 (3.15),
   MPL-2.0 (Pyodide-LICENSE-MPL-2.0.txt). Pyodide's CPython is under the PSF license (CPython-LICENSE-PSF.txt); the
-  Emscripten runtime (6.0.5 in the 3.15 build; 5.0.3 is the one of the 3.14 lock (`platform: emscripten_5_0_3`) and xbuildenv, not checked in the 3.14 main module itself; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
+  Emscripten runtime (6.0.5 in the 3.15 build; 5.0.3 in the 3.14 build; both are read from the main modules: `pyodide-nojs --python 3.14 -c "import sys; print(sys._emscripten_info.emscripten_version)"` prints (5, 0, 3), `--python 3.15` prints (6, 0, 5); MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
   (MIT: musl-COPYRIGHT-MIT.txt) compiled into pyodide.asm.wasm. The files are
   Pyodide's own, with the legacy wasm exceptions converted to exnref (Binaryen 132), and pyodide.asm.wasm also has one patch: libc's
   `setsockopt` stub is turned into an import (tools/patch_main.mjs); fused is also merged with adapter.wasm.

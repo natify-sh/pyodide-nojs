@@ -72,7 +72,7 @@ Python 3.14 answers as Pyodide 314.0.7 wherever Pyodide 314's main module differ
 
 | what | Pyodide 314.0.7 | here (3.14) | test |
 |---|---|---|---|
-| an empty path with a descriptor that is no directory (`os.stat('', dir_fd=99)`, `os.open('', os.O_RDONLY, dir_fd=99)`) | `EBADF`: the descriptor is looked at first | `ENOENT`: the path is looked at first (Linux's) | `tests/test_paths_errno.py::test_the_empty_path_is_enoent_in_every_call` (leaves the bad-descriptor case out for 3.14) |
+| an empty path with a descriptor that is no directory (`os.stat('', dir_fd=99)`, `os.open('', os.O_RDONLY, dir_fd=99)`) | `EBADF`: the descriptor is looked at first | `ENOENT`: the path is looked at first (Linux's) | `tests/test_paths_errno.py::test_the_empty_path_is_enoent_in_every_call` (for 3.14 it records our `ENOENT` for the bad descriptor, so it fails if that changes) |
 | `select.poll()` on a number that is no descriptor (`p.register(99, POLLIN); p.poll(0)`) | no entry (`[]`) | `POLLNVAL`: `[(99, 32)]` | `tests/test_descriptors.py::test_numbers_that_are_no_descriptor_are_ebadf_whatever_the_value` |
 
 Measured with `node` on `pyo-build/dl/dist-314` (Pyodide 314.0.7: `EBADF`, `EBADF`, `[]`) and with `uv run python -m pyodide_nojs --python 3.14 --flavor fused|dynamic` (`ENOENT`, `[(99, 32)]` on both).
