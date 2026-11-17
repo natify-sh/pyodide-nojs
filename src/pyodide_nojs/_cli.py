@@ -384,9 +384,13 @@ def main(argv: list[str] | None = None) -> int:
             return call(
                 lambda: py.run(code, argv0, allow_top_level_await=ns.allow_top_level_await), program=True, final=True
             )
-    finally:  # `final` left SIGINT ignored for close(); put back what the caller had (main() can be called in-process)
-        try:
-            if orig_sigint is not None:
-                signal.signal(signal.SIGINT, orig_sigint)
-        except ValueError:  # not the main thread
-            pass
+    finally:
+        # `final` left SIGINT ignored for close(). The CLI process (argv is None: a console script or `python -m`)
+        # keeps it ignored to its end: a late Ctrl-C of a quick burst lands in the interpreter's own exit (atexit,
+        # gc) otherwise. A call in-process (the tests) gets back what its caller had.
+        if argv is not None:
+            try:
+                if orig_sigint is not None:
+                    signal.signal(signal.SIGINT, orig_sigint)
+            except ValueError:  # not the main thread
+                pass
