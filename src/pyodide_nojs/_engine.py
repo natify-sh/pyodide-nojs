@@ -108,7 +108,7 @@ class LazyExports(Mapping):
 
 
 DEFAULT_WASM_STACK = 512 * 1024  # wasmtime's own
-BIG_WASM_STACK = 1 << 20
+BIG_WASM_STACK = 2 << 20  # Python 3.14's parser needs a little over 1 MiB for its 6000 levels (test_syntax)
 
 
 def wasm_stack(platform: str, soft_limit: int | None, main_thread: bool) -> int:
@@ -121,8 +121,9 @@ def wasm_stack(platform: str, soft_limit: int | None, main_thread: bool) -> int:
 
 
 def depth_cap(stack: int) -> int:
-    """How many NEEDED libraries may nest below the first, for that wasm stack (measured on Linux, fused and dynamic:
-    1 MiB loads 1500 and traps at about 2000; the default 512 KiB loads 1000 and traps at 1200)."""
+    """How many NEEDED libraries may nest below the first, for that wasm stack (measured on Linux, fused and dynamic,
+    with the stack then 1 MiB: it loads 1500 and traps at about 2000; the default 512 KiB loads 1000 and traps at
+    1200; the big stack is 2 MiB now and 1500 was not raised)."""
     return 1500 if stack >= BIG_WASM_STACK else 800
 
 

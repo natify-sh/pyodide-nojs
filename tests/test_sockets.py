@@ -264,7 +264,12 @@ def test_poll_reports_a_hang_up(guest: Guest, port: int):
     if sys.platform == "darwin":
         # BSD refuses shutdown() on a socket whose peer has closed (ENOTCONN: CI run 42829422107); Linux accepts it.
         # and its poll says POLLHUP at once for the closed peer (Linux only after shutdown): CI run 42844873832
-        assert out[:2] == ["[(True, True)] b''", "shutdown: ENOTCONN"], out
+        # Python 3.14 has no shutdown at all (ENOSYS, below), and the hang-up stays (CI, macOS with Pyodide 3.14: the
+        # third line was [True]; the first line already has POLLHUP, shutdown changed nothing)
+        if PYTHON == "3.14":
+            assert out == ["[(True, True)] b''", "shutdown: ENOSYS", "[True]"], out
+        else:
+            assert out[:2] == ["[(True, True)] b''", "shutdown: ENOTCONN"], out
     elif PYTHON == "3.14":  # no shutdown in Emscripten 5.0.3's libc (no __syscall_shutdown): ENOSYS, as in Pyodide 314
         assert out == ["[(True, False)] b''", "shutdown: ENOSYS", "[False]"]
     else:

@@ -418,7 +418,7 @@ print("cycle", x.x(), ctypes.CDLL("/y/y.so").y())
     assert out == ["300 libraries True 300", "chain 0 19 True", "cycle 1 2"]
     # the depth: V8's stack ends a chain of NEEDED libraries at about 2000 (Pyodide on Node 22 loads 1800, fails with
     # "RangeError: Maximum call stack size exceeded" from 2200); here 1500 below the first one is the cap
-    # (_engine.depth_cap of the wasm stack in force: 1 MiB, or 800 with the default one): deliberate difference,
+    # (_engine.depth_cap of the wasm stack in force: the big one, or 800 with the default one): deliberate difference,
     # the text is V8's
     from pyodide_nojs import _engine
 

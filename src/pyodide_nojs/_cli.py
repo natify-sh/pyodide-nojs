@@ -99,7 +99,7 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
     # taken by this thread and not by the worker.
     winch = [signal.SIGWINCH] if hasattr(signal, "SIGWINCH") else []
 
-    def call(fn: Callable[..., Any], *args: Any, program: bool = False) -> Any:
+    def call(fn: Callable[..., Any], *args: Any, program: bool = False, final: bool = False) -> Any:
         nonlocal pending
         out: list[Any] = []
 
@@ -151,8 +151,8 @@ def guest_caller(py: Pyodide) -> Callable[..., Any]:
             while t.is_alive():  # a plain join() is not interruptible on Windows
                 t.join(0.1)
         finally:
-            if before is not None:
-                signal.signal(signal.SIGINT, before)
+            if before is not None:  # `final`: the last run, then close(): a late Ctrl-C (a quick burst) is ignored
+                signal.signal(signal.SIGINT, signal.SIG_IGN if final else before)
             if before_winch is not None:
                 signal.signal(winch[0], before_winch)
         if isinstance(out[0], BaseException):
@@ -352,30 +352,41 @@ def main(argv: list[str] | None = None) -> int:
     else:
         code = sys.stdin.read()
     preload = SETUP.format(aw=ns.allow_top_level_await) if code is None else None
-    with Pyodide(
-        flavor,
-        python=ns.python,
-        site=ns.site,
-        venv=ns.venv,
-        mounts=mounts,
-        env=dict(e.split("=", 1) for e in ns.env),
-        inherit_env=ns.inherit_env,
-        data=ns.data,
-        preload=preload,
-        asm_wasm=ns.asm_wasm,
-        stdlib=ns.stdlib,
-        inherit_network=ns.inherit_network,
-        tcp=ns.tcp,
-        udp=ns.udp,
-        dns=ns.dns,
-        http=ns.http,
-        pyfetch=ns.pyfetch,
-    ) as py:
-        call = guest_caller(py)
-        call(py.run, "pass")  # the start (it can be long): a Ctrl-C during it is delivered to the program that follows
-        if ns.mount_cwd:
-            call(py.run, f"__import__('os').chdir({CWD_MOUNT!r})")
-        if code is None:
-            return repl(py, call)
-        # 0, 1 for an uncaught error, 130 for an uncaught KeyboardInterrupt, or the code of sys.exit()/os._exit()
-        return call(lambda: py.run(code, argv0, allow_top_level_await=ns.allow_top_level_await), program=True)
+    orig_sigint = signal.getsignal(signal.SIGINT)
+    try:
+        with Pyodide(
+            flavor,
+            python=ns.python,
+            site=ns.site,
+            venv=ns.venv,
+            mounts=mounts,
+            env=dict(e.split("=", 1) for e in ns.env),
+            inherit_env=ns.inherit_env,
+            data=ns.data,
+            preload=preload,
+            asm_wasm=ns.asm_wasm,
+            stdlib=ns.stdlib,
+            inherit_network=ns.inherit_network,
+            tcp=ns.tcp,
+            udp=ns.udp,
+            dns=ns.dns,
+            http=ns.http,
+            pyfetch=ns.pyfetch,
+        ) as py:
+            call = guest_caller(py)
+            # the start (it can be long): a Ctrl-C during it is delivered to the program that follows
+            call(py.run, "pass")
+            if ns.mount_cwd:
+                call(py.run, f"__import__('os').chdir({CWD_MOUNT!r})")
+            if code is None:
+                return repl(py, call)
+            # 0, 1 for an uncaught error, 130 for an uncaught KeyboardInterrupt, or the code of sys.exit()/os._exit()
+            return call(
+                lambda: py.run(code, argv0, allow_top_level_await=ns.allow_top_level_await), program=True, final=True
+            )
+    finally:  # `final` left SIGINT ignored for close(); put back what the caller had (main() can be called in-process)
+        try:
+            if orig_sigint is not None:
+                signal.signal(signal.SIGINT, orig_sigint)
+        except ValueError:  # not the main thread
+            pass
