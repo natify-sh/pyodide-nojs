@@ -42,15 +42,21 @@ static void fill_tm(i64 t, i32 *tm, i32 js_yday) {
         tm[7] = (i32)(days - days_from_civil(y, 1, 1));
 }
 
+// An error leaves zeros in the struct: Pyodide 314's functions have no result and write zeros there; later ones return the error
+// and the caller does not read the struct.
+static void zero_tm(i32 *tm) {
+    for (i32 i = 0; i < 11; i++) tm[i] = 0;
+}
+
 EXPORT("_gmtime_js") i32 gmtime_js(i64 t, i32 *tm) {
-    if (t > DATE_LIMIT || t < -DATE_LIMIT) return 1;
+    if (t > DATE_LIMIT || t < -DATE_LIMIT) return zero_tm(tm), 1;
     fill_tm(t, tm, 1);
     return 0;
 }
 
 EXPORT("_localtime_js") i32 localtime_js(i64 t, i32 *tm) {
     i32 off = host_localtime(t, tm);  // tm_isdst and tm_gmtoff; the exact offset east for the fields, INT_MIN: out of Date's range
-    if (off == (i32)0x80000000) return 1;
+    if (off == (i32)0x80000000) return zero_tm(tm), 1;
     fill_tm(t + off, tm, 0);
     return 0;
 }

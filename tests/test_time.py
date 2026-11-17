@@ -39,8 +39,8 @@ def expected(name: str) -> list[str]:
 
 
 def same(out: list[str], want: list[str]) -> None:
-    """3.14's _gmtime_js/_localtime_js return nothing (3.15's an error): beyond +-8.64e12 s the struct is not written
-    and the call is no OSError 28 (Pyodide 314: zeros, here what the struct held). There only the input is compared."""
+    """3.14's _gmtime_js/_localtime_js return nothing (3.15's an error): beyond +-8.64e12 s the struct holds
+    zeros and the call is no OSError 28 (as in Pyodide 314; see the test below). There only the input is compared."""
     if PYTHON == "3.14":
         assert len(out) == len(want)
         mask = [w.endswith("OSError 28") for w in want]
@@ -53,6 +53,18 @@ def test_gmtime_and_timegm_at_the_edges_of_date(guest: Guest) -> None:
     """The error beyond +-8.64e12 s (OSError EINVAL), the year 0..99 read as 19xx, the day of the year that comes
     out of it, V8's limits for timegm: all as the JavaScript does them."""
     same(run_in_zone(guest, "time_gm.py", "UTC").splitlines(), expected("time_gm.expected"))
+
+
+def test_time_beyond_the_range_is_an_error_on_315_and_zeros_on_314(guest: Guest) -> None:
+    """3.15's functions return the error (OSError 28); 3.14's return nothing and Pyodide 314 leaves zeros in the struct:
+    so does the adapter (it zeroed nothing before, and the caller read what the struct held)."""
+    p = guest.run(
+        "import time\nfor f in (time.gmtime, time.localtime):\n"
+        "    try: print(tuple(f(9e12)))\n    except OSError as e: print('OSError', e.errno)\n"
+    )
+    assert p.returncode == 0, p.stderr
+    want = "OSError 28" if PYTHON == "3.15" else "(1900, 1, 0, 0, 0, 0, 6, 1, 0)"
+    assert p.stdout.splitlines() == [want, want]
 
 
 @pytest.mark.parametrize("tz", ZONES)
