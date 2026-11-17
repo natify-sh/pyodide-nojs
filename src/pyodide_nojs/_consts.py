@@ -20,8 +20,8 @@ log = logging.getLogger("pyodide_nojs")
 Reader = Callable[[int, int], bytes]
 Writer = Callable[[int, bytes], None]
 
-PYVER = "3.15"  # the Python of the pinned Pyodide (315.0.0-alpha.2 = 3.15.0rc1)
-PYVER_FULL = "3.15.0rc1"  # CPython's own version string, a NUL-delimited constant in the pinned pyodide.asm.wasm
+PYVER = "3.14"  # the Python of the pinned Pyodide (315.0.0-alpha.2 = 3.15.0rc1)
+PYVER_FULL = "3.14.2"  # CPython's own version string, a NUL-delimited constant in the pinned pyodide.asm.wasm
 FLAVORS = ("fused", "dynamic")
 DATA = Path(__file__).resolve().parent / "data"
 GUEST = Path(__file__).resolve().parent / "guest"  # Python that runs in the guest: copied to its site-packages

@@ -331,4 +331,7 @@ EXPORT("__syscall_pipe2") i32 sc_pipe2(i32 *out, i32 flags) {
     return 0;
 }
 
+// Pyodide 314 imports __syscall_pipe(fds) where 315 has pipe2: the same pipe, no flags
+EXPORT("__syscall_pipe") i32 sc_pipe(i32 *out) { return sc_pipe2(out, 0); }
+
 #endif

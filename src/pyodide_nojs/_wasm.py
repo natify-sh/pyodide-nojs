@@ -162,6 +162,7 @@ def shim_wat(imports, forwarded, got_names):
                     "(param )", ""
                 ).replace("(result )", "")
             )
+    lines.append("  (type $tx (func (param i64 i32) (result i32)))")
     lines.append(f'  (table (export "table") {max(1, len(forwarded))} funcref)')
     for m, n, ps, rs in imports:
         if m == "wasi_snapshot_preview1" and n in WASI_ROUTED and n in forwarded:
@@ -176,7 +177,10 @@ def shim_wat(imports, forwarded, got_names):
         sig = " ".join(f"(param {p})" for p in ps) + " " + " ".join(f"(result {r})" for r in rs)
         if n in forwarded:
             args = " ".join(f"(local.get {k})" for k in range(len(ps)))
-            body = f"(call_indirect (type {types[(tuple(ps), tuple(rs))]}) {args} (i32.const {forwarded[n]}))"
+            if n in ("_gmtime_js", "_localtime_js") and not rs:  # EXPERIMENT 314: void import, adapter returns i32
+                body = f"(drop (call_indirect (type {types[(('i64','i32'), ('i32',))] if (('i64','i32'),('i32',)) in types else '$tx'}) {args} (i32.const {forwarded[n]})))"
+            else:
+                body = f"(call_indirect (type {types[(tuple(ps), tuple(rs))]}) {args} (i32.const {forwarded[n]}))"
         else:
             body = stub_results(n, rs)
         lines.append(f'  (func (export "{n}") {sig} {body})')
