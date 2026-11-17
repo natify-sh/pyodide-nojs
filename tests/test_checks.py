@@ -239,7 +239,7 @@ def test_micropip_installs_numpy_from_pyodides_lock(guest: Guest):
         "import scipy.linalg\nprint('scipy', scipy.linalg.det([[1, 2], [3, 4]]))\n",
     )
     assert p.returncode == 0, p.stderr[-2000:]
-    assert re.search(r"^numpy 2\.4\.3 3$", p.stdout, re.M), p.stdout
+    assert re.search(rf"^numpy {re.escape(lock_version('numpy'))} 3$", p.stdout, re.M), p.stdout
     assert re.search(r"^scipy -2\.0$", p.stdout, re.M), p.stdout
 
 
