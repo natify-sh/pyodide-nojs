@@ -319,9 +319,13 @@ def test_a_writer_never_outlives_the_memory(flavor: str) -> None:
     t.start()
     try:
         # a round starts an interpreter: 100 outlived the 90 s bound on a slow runner, and so did 25 (Windows, 3.10)
-        for _ in range(10):
+        # at least 10 rounds, and more until the thread has posted once: on a loaded runner (Windows) it can miss every
+        # window of the first rounds, and `posted > 0` only says that the hammering happened
+        for i in range(30):
             assert py.run("import signal\nsignal.signal(signal.SIGUSR1, lambda s, f: None)") == 0
             py.close()
+            if i >= 9 and posted > 0:
+                break
     finally:
         stop.set()
         t.join()
