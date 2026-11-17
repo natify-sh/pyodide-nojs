@@ -13,7 +13,13 @@ import threading
 import zipfile
 
 import pytest
-from conftest import Guest, check_file
+from conftest import PYTAG, PYTHON, Guest, check_file, lock, lock_version
+
+from pyodide_nojs import PYTHONS
+
+ABI_VERSION = (
+    PYTHONS[PYTHON]["abi"].removeprefix("pyemscripten_").removesuffix("_wasm32")
+)  # the lock's abi_version: 2026_5
 
 
 def exact(guest: Guest, script: str, site: str | None, expected: str, *args: str):
@@ -47,7 +53,7 @@ NET = [
     r"^cffi \(binary wheel via micropip\) 2\.0\.0 25 10$",
 ]
 TLS = [
-    r"^ssl OpenSSL 3\.5\.\d+ .*_ssl\.cpython-315-wasm32-emscripten\.so$",
+    r"^ssl OpenSSL 3\.5\.\d+ .*_ssl\.cpython-" + PYTAG + r"-wasm32-emscripten\.so$",
     r"^handshake TLSv1\.3 \S+ \| peer cert subject CN: pypi\.org$",
     r"^raw response: HTTP/1\.1 200 OK$",
     r"^urllib 200 six$",
@@ -61,11 +67,11 @@ try:
 except ssl.SSLCertVerificationError as e:
     print("refused:", e.verify_message)
 """
-NUMPY_WHEEL = """
+NUMPY_WHEEL = f"""
 import asyncio, hostnet
 hostnet.install()
 import micropip
-asyncio.run(micropip.install("https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/numpy-2.4.3-cp315-cp315-pyemscripten_2026_5_wasm32.whl"))
+asyncio.run(micropip.install("{PYTHONS[PYTHON]["lock_base"]}numpy-{lock_version("numpy")}-cp{PYTAG}-cp{PYTAG}-{PYTHONS[PYTHON]["abi"]}.whl"))
 """
 
 
@@ -193,7 +199,10 @@ def test_micropip_finds_a_package_of_the_lock(guest: Guest, tmp_path):
             guest,
             LOCK_GUEST % (entries, port),
             None,
-            [r"^lock 2026_5 31 2\.4\.3$", r"^installed 42 pyodide$"],
+            [
+                rf"^lock {ABI_VERSION} {len(lock()['packages'])} {re.escape(lock_version('numpy'))}$",
+                r"^installed 42 pyodide$",
+            ],
         )
 
 
@@ -249,7 +258,11 @@ def test_micropip_is_bundled_with_no_site(guest: Guest):
         guest,
         BUNDLED,
         None,
-        [r"^micropip 0\.11\.1 0\.11\.1 26\.1$", r"^hook 2026_5 2\.4\.3$", r"^list \[\]$"],
+        [
+            r"^micropip 0\.11\.1 0\.11\.1 26\.1$",
+            rf"^hook {ABI_VERSION} {re.escape(lock_version('numpy'))}$",
+            r"^list \[\]$",
+        ],
     )
 
 

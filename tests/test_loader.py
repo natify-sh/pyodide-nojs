@@ -581,7 +581,7 @@ def test_a_real_wheels_library_cut_at_every_section_boundary(guest: Guest):
         pytest.skip(f"{site} is missing (tools/prepare_testenv.sh)")
     code = r"""
 import glob, os
-sos = sorted(glob.glob("/lib/python3.15/site-packages/numpy/**/*.so", recursive=True), key=os.path.getsize)
+sos = sorted(glob.glob("@@LIB@@/site-packages/numpy/**/*.so", recursive=True), key=os.path.getsize)
 so = sos[0]
 good = open(so, "rb").read()
 def leb(b, i):
@@ -605,7 +605,7 @@ for k, cut in enumerate(sorted(c for c in cuts if c < len(good))):
         assert "could not load dynamic lib: " + p in str(e), str(e); fails += 1
 print("sections", len(cuts), "failed", fails > len(cuts) // 2, "survived", True)
 """
-    p = guest.run(PRE + code, "site")
+    p = guest.run(PRE + code.replace("@@LIB@@", conftest.LIB), "site")
     assert p.returncode == 0, p.stderr[-3000:]
     assert p.stdout.splitlines()[-1].endswith("failed True survived True")
 

@@ -1,5 +1,5 @@
 """The guest's `ssl` is always the real one (`_ssl` with OpenSSL 3.5.9 and `ssl.py`, from data/<python>/tls), on both
-builds and both Pythons (the snapshot and folder tests below are 3.15's)."""
+builds and both Pythons (the snapshot and folder tests below run the session's)."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import Guest, check_file, missing
+from conftest import PYTHON, Guest, check_file, missing
 
 from pyodide_nojs import Pyodide, data_dir
 
 pytestmark = pytest.mark.skipif(
-    not (data_dir() / "3.15" / "tls").is_dir() and not os.environ.get("CI"),
+    not (data_dir() / PYTHON / "tls").is_dir() and not os.environ.get("CI"),
     reason="no data/tls (run tools/build_ssl.sh pyo-build)",
 )
 
@@ -113,7 +113,7 @@ def test_snapshot_key_follows_the_tls_files(flavor: str, tmp_path: Path):
     data = tmp_path / "data"
     shutil.copytree(data_dir(), data, symlinks=True)
     before = Pyodide(flavor, data=data, preload="x = 1\n")._snapshot_path()
-    ssl_py = data / "3.15" / "tls" / "ssl.py"
+    ssl_py = data / PYTHON / "tls" / "ssl.py"
     ssl_py.write_text(ssl_py.read_text() + "\n# changed\n")
     assert Pyodide(flavor, data=data, preload="x = 1\n")._snapshot_path() != before
 
@@ -122,12 +122,12 @@ def test_missing_tls_folder_is_an_error(flavor: str, tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir()
     for f in data_dir().iterdir():
-        if f.name != "3.15":
+        if f.name != PYTHON:
             (data / f.name).symlink_to(f.resolve())
-    (data / "3.15").mkdir()
-    for f in (data_dir() / "3.15").iterdir():
+    (data / PYTHON).mkdir()
+    for f in (data_dir() / PYTHON).iterdir():
         if f.name != "tls":
-            (data / "3.15" / f.name).symlink_to(f.resolve())
+            (data / PYTHON / f.name).symlink_to(f.resolve())
     with pytest.raises(FileNotFoundError, match=r"sh tools/build_ssl\.sh pyo-build"):
         Pyodide(flavor, data=data)
 

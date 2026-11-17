@@ -154,16 +154,19 @@ def link(a, b):  # (Pyodide's os has no link)
     return errno.errorcode[ctypes.get_errno()]
 
 
+import sys
+# 3.14's libc has no linkat: link() is EMLINK, as in Pyodide 314
+LINK = 'EMLINK' if sys.version_info < (3, 15) else 'EACCES'
 open('/tmp/src', 'w').write('x')
 for p in ('/dev', '/proc', '/dev/shm'):
     assert err(os.mkdir, p) == 'EEXIST'
 for p in ('/dev/x', '/proc/x', '/dev/shm/x', '/proc/self/fd/x'):
     assert err(os.mkdir, p) == 'EACCES', p
     assert err(os.symlink, '/tmp', p) == 'EACCES' and err(os.rename, '/tmp/src', p) == 'EACCES'
-    assert link('/tmp/src', p) == 'EACCES' and err(os.unlink, p) == 'ENOENT' and err(os.rmdir, p) == 'ENOENT'
+    assert link('/tmp/src', p) == LINK and err(os.unlink, p) == 'ENOENT' and err(os.rmdir, p) == 'ENOENT'
 for p in ('/dev', '/dev/null', '/dev/shm', '/proc', '/proc/self/fd'):
     assert err(os.rmdir, p) == 'EACCES' and err(os.unlink, p) == 'EACCES', p
-    assert err(os.rename, p, '/tmp/moved') == 'EACCES' and link(p, '/tmp/lk') == 'EACCES'
+    assert err(os.rename, p, '/tmp/moved') == 'EACCES' and link(p, '/tmp/lk') == LINK
 assert err(os.mkdir, '/dev/null/x') == 'ENOTDIR'
 assert os.listdir('/dev') == os.listdir('/dev') and os.path.exists('/dev/null') and not os.path.exists('/tmp/moved')
 """,

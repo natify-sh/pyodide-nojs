@@ -53,7 +53,10 @@ def test_the_empty_path_is_enoent_in_every_call(guest: Guest):
         guest,
         """
 dfd = os.open('.', os.O_RDONLY)
-for dir_fd in (None, dfd, 99):  # (a bad descriptor does not matter: the path is looked at first)
+# (a bad descriptor does not matter: the path is looked at first; Pyodide 314 looks at the descriptor first: EBADF, a
+# difference of the adapter's, which follows 315: left out for 3.14)
+import sys
+for dir_fd in (None, dfd, 99) if sys.version_info >= (3, 15) else (None, dfd):
     kw = {} if dir_fd is None else {'dir_fd': dir_fd}
     assert err(os.open, '', os.O_RDONLY, **kw) == 'ENOENT', dir_fd
     assert err(os.stat, '', **kw) == 'ENOENT', dir_fd
@@ -72,7 +75,8 @@ assert err(os.chmod, '', 0o755) == 'ENOENT' and err(os.chown, '', 0, 0) == 'ENOE
 assert not os.access('', os.F_OK)
 # linkat with an empty path (os.link is not in Pyodide's os)
 linkat = libc.linkat
-assert raw(linkat, -100, b'', -100, b'z', 0) == 'ENOENT' and raw(linkat, -100, b'f', -100, b'', 0) == 'ENOENT'
+if sys.version_info >= (3, 15):  # 3.14's libc has no linkat
+    assert raw(linkat, -100, b'', -100, b'z', 0) == 'ENOENT' and raw(linkat, -100, b'f', -100, b'', 0) == 'ENOENT'
 # utimensat: "" is ENOENT (Linux; Pyodide takes it as the descriptor), os.utime(fd) is futimens (a null path) and works
 assert err(os.utime, '', (1, 1)) == 'ENOENT' and err(os.utime, '', (1, 1), dir_fd=dfd) == 'ENOENT'
 if not WIN:  # a Windows host's directory handle lacks write-attributes access (EACCES)

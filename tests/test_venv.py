@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import PYTHON
 
 from pyodide_nojs import PYTHONS, Pyodide, _venv
 
-PYVER = "3.15"  # the Python of these tests (tests/conftest.py)
+PYVER = PYTHON  # the Python of these tests (tests/conftest.py)
+OTHER = next(p for p in PYTHONS if p != PYVER)
 PYODIDE_ABI = PYTHONS[PYVER]["abi"]
 
 CP = "cp" + PYVER.replace(".", "")
@@ -62,11 +64,11 @@ def test_explicit_site_wins_over_the_venv(flavor: str, tmp_path: Path) -> None:
 
 
 def test_another_python_is_an_error(flavor: str, tmp_path: Path) -> None:
-    make_venv(tmp_path / "v", version="3.14.2")
-    with pytest.raises(ValueError, match=rf"3\.14.*{re.escape(PYVER)}"):
+    make_venv(tmp_path / "v", version=f"{OTHER}.2")
+    with pytest.raises(ValueError, match=rf"{re.escape(OTHER)}.*{re.escape(PYVER)}"):
         Pyodide(flavor, venv=tmp_path / "v")
     r = cli(flavor, "--venv", str(tmp_path / "v"))
-    assert r.returncode == 2 and "3.14" in r.stderr and "Traceback" not in r.stderr, r.stderr
+    assert r.returncode == 2 and OTHER in r.stderr and "Traceback" not in r.stderr, r.stderr
 
 
 def test_a_root_without_site_packages_is_an_error(flavor: str, tmp_path: Path) -> None:

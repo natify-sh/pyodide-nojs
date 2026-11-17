@@ -8,20 +8,30 @@
 #       reason: what happens and why it is not ours to fix (or what the difference is)
 #       flavor: both | fused | dynamic     (default both)
 #       platform: sys.platform prefix of the host     (default every host)
+#       python: 3.14 | 3.15     (default both; the module's name differs between the releases' python_tests.yaml)
 #
 # PYODIDE_SUITE_NO_OVERLAY=1 ignores this file (with PYODIDE_SUITE_RUN_XFAIL=1 that is the raw failing set).
 
-test_os.test_os:
-  - skip:
+test_os.test_os: # 3.15 (3.14's python_tests.yaml has `test_os`, below)
+  - python: "3.15"
+    skip:
       - "*ReadlinkTests.test_bytes"
       - "*ReadlinkTests.test_pathlike"
       - "*ReadlinkTests.test_pathlike_bytes"
-    reason: >-
+    reason: &os_reason >-
       the test makes a symlink in the working directory (the guest's root, a host folder) to an absolute path inside the
       mounted `test` folder (another WASI preopen; the harness mounts `test` as a separate preopen, so this is partly an
       artefact of the harness, the same link inside one tree works); a link is stored as a path relative to its own directory, and no
       relative path leads from one preopen to another, so os.symlink is EXDEV (platform limit of WASI/cap-std, written
       in the audit entry of __syscall_symlinkat; Pyodide's MEMFS has one tree)
+
+test_os:
+  - python: "3.14"
+    skip:
+      - "*ReadlinkTests.test_bytes"
+      - "*ReadlinkTests.test_pathlike"
+      - "*ReadlinkTests.test_pathlike_bytes"
+    reason: *os_reason
 
 test_posixpath:
   - skip:

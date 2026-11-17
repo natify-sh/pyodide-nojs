@@ -1,9 +1,11 @@
 name: Tests
 
 # build.yml builds the wasm once (wasi-sdk 34's clang for everything except the guest's `_ssl`; Node only as a build tool), then:
-#   test     the offline tests on every OS and CPython oldest/newest, both builds (fused and dynamic) in each test
-#   network  the checks that go to PyPI and jsDelivr (the host's fetch, the guest's own TLS, micropip, numpy's wheel)
-#   suite    Pyodide's official CPython test suite (python_tests.yaml, libregrtest) on BOTH builds, one job per build, spread over the cores by xdist
+#   test     the offline tests on every OS and CPython oldest/newest, both builds (fused and dynamic) in each test; the guest's Python
+#            (`pyodide`, $PYODIDE_NOJS_PYTHON) is 3.14 (the default) and 3.15 on Linux, the default only on Windows and macOS
+#   network  the checks that go to PyPI and jsDelivr (the host's fetch, the guest's own TLS, micropip, numpy's wheel), for each guest Python
+#   suite    Pyodide's official CPython test suite (python_tests.yaml, libregrtest) on BOTH builds and BOTH guest Pythons, one job per
+#            build and Python, spread over the cores by xdist
 # A missing build fails a test on CI instead of skipping it (CI=true).
 
 on:
@@ -29,7 +31,7 @@ jobs:
     uses: ./.github/workflows/build.yml
 
   test:
-    name: ${{ matrix.os }} / ${{ matrix.python-version }}
+    name: ${{ matrix.os }} / ${{ matrix.python-version }} / Pyodide ${{ matrix.pyodide }}
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:
@@ -37,6 +39,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12", "3.15"]
+        pyodide: ["3.14"] # the guest's Python; 3.15 is added for Linux below
+        include:
+          - { os: ubuntu-latest, python-version: "3.12", pyodide: "3.15" }
+          - { os: ubuntu-latest, python-version: "3.15", pyodide: "3.15" }
+    env:
+      PYODIDE_NOJS_PYTHON: ${{ matrix.pyodide }}
     defaults:
       run:
         shell: bash
@@ -67,9 +75,15 @@ jobs:
         run: uv run --locked pytest -v -n auto -m "not network and not suite"
 
   network:
-    name: network checks
+    name: network checks / Pyodide ${{ matrix.pyodide }}
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pyodide: ["3.14", "3.15"]
+    env:
+      PYODIDE_NOJS_PYTHON: ${{ matrix.pyodide }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -96,7 +110,7 @@ jobs:
         run: uv run --locked pytest -v -m network
 
   suite:
-    name: Pyodide suite / ${{ matrix.flavor }}
+    name: Pyodide suite / ${{ matrix.flavor }} / ${{ matrix.pyodide }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -104,6 +118,7 @@ jobs:
       fail-fast: false
       matrix:
         flavor: [fused, dynamic]
+        pyodide: ["3.14", "3.15"]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -129,14 +144,15 @@ jobs:
       - name: Pyodide's CPython test suite
         env:
           PYODIDE_SUITE_FLAVORS: ${{ matrix.flavor }}
-        # one job per build, the modules spread over the runner's cores by xdist (a module is one guest process)
+          PYODIDE_NOJS_PYTHON: ${{ matrix.pyodide }}
+        # one job per build and Python, the modules spread over the runner's cores by xdist (a module is one guest process)
         run: >-
           uv run --locked --group suite pytest -v -n auto -m suite
-          --junit-xml=suite-${{ matrix.flavor }}.xml
+          --junit-xml=suite-${{ matrix.flavor }}-${{ matrix.pyodide }}.xml
 
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
-          name: suite-${{ matrix.flavor }}
+          name: suite-${{ matrix.flavor }}-${{ matrix.pyodide }}
           path: suite-*.xml
           retention-days: 14

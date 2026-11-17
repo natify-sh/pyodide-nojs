@@ -6,8 +6,8 @@ name: Build wasm
 #              pyodide-lock.json
 #   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten: tools/build_ssl.sh, once per Python) -> data/3.14/tls, data/3.15/tls; the static
 #              OpenSSL libraries are cached by the hash of the script (every pin is in it)
-#   testenv    numpy, cffi, the `test` package and a venv, installed by the pip of a real `pyodide venv` (uv's Python 3.15, pyodide-build, Node);
-#              openssl and python_tests.yaml (tools/prepare_testenv.sh)
+#   testenv    for each Python (testenv/3.14, testenv/3.15): numpy, cffi, the `test` package and a venv, installed by the pip of a real `pyodide venv`
+#              (uv's Python of that version, pyodide-build, Node); openssl and python_tests.yaml (tools/prepare_testenv.sh)
 # Node is a build tool here (Binaryen's wasm-opt and wasm-merge from npm); the package needs none at run time.
 
 on:
@@ -75,7 +75,7 @@ jobs:
       - name: Restore the OpenSSL libraries
         uses: actions/cache@v6
         with:
-          path: ssl-work/rc/.libs
+          path: ssl-work/${{ matrix.python }}/rc/.libs
           key: ssl-libs-${{ matrix.python }}-${{ hashFiles('tools/build_ssl.sh') }}
 
       - name: Build _ssl and ssl.py
@@ -123,7 +123,7 @@ jobs:
           uv sync --locked
           PATH="$PWD/.venv/bin:$PATH" WASM_OPT_WASM="$PWD/wasm-opt/wasm-opt.wasm" sh tools/build_data.sh pyo-build
 
-      - name: Build the test environment
+      - name: Build the test environments (3.14 and 3.15)
         run: PATH="$PWD/.venv/bin:$PATH" sh tools/prepare_testenv.sh pyo-build
 
       - uses: actions/upload-artifact@v7

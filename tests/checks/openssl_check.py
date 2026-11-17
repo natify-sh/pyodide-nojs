@@ -4,7 +4,7 @@ import ctypes
 import hashlib
 import os
 
-P = "/lib/python3.15/site-packages/openssl/"
+P = "@@LIB@@/site-packages/openssl/"
 # libssl.so NEEDs "libcrypto.so" by its bare name, which the glue looks for only in the runtime paths and LD_LIBRARY_PATH
 os.environ["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "") + ":" + P.rstrip("/")
 crypto = ctypes.CDLL(P + "libcrypto.so")

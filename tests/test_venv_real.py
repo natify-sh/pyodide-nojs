@@ -26,11 +26,11 @@ def test_real_venv_api(flavor: str, capfd: pytest.CaptureFixture[str]) -> None:
         assert py.run(CODE) == 0
     out, err = capfd.readouterr()
     lines = out.splitlines()
-    assert lines[0] == "10" and "/lib/python3.15/site-packages/numpy/" in lines[1], (out, err)
+    assert lines[0] == "10" and f"{conftest.LIB}/site-packages/numpy/" in lines[1], (out, err)
 
 
 def test_real_venv_cli(flavor: str) -> None:
     cmd = [sys.executable, "-m", "pyodide_nojs", "--flavor", flavor, "--venv", str(venv_root()), "-c", CODE]
     r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=1800)
     assert r.returncode == 0 and r.stdout.splitlines()[0] == "10", r.stderr
-    assert "/lib/python3.15/site-packages/numpy/" in r.stdout, r.stdout
+    assert f"{conftest.LIB}/site-packages/numpy/" in r.stdout, r.stdout

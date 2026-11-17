@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from pyodide_nojs import FLAVORS, _engine, available_flavors, data_dir
+from pyodide_nojs import FLAVORS, PYTHONS, _engine, available_flavors, data_dir
+from pyodide_nojs._consts import python_version
 
-# the fixtures, the testenv (numpy, the `test` package) and the real _ssl are Python 3.15's for now: every Pyodide() and
-# every `python -m pyodide_nojs` of the tests runs it unless a test says otherwise (tests/test_versions.py)
-PYTHON = os.environ.setdefault("PYODIDE_NOJS_PYTHON", "3.15")
+# The Python of the session: $PYODIDE_NOJS_PYTHON, else the default. Every Pyodide() and every
+# `python -m pyodide_nojs` of the tests runs it unless a test says otherwise (tests/test_versions.py);
+# the testenv is that Python's.
+PYTHON = python_version()
+os.environ["PYODIDE_NOJS_PYTHON"] = PYTHON
+PYTAG = PYTHON.replace(".", "")  # 315: the zip's and the wheels' tag
+LIB = f"/lib/python{PYTHON}"  # the guest's stdlib and site-packages parent
+ZIP = f"/lib/python{PYTAG}.zip"
+RELEASE = PYTHONS[PYTHON]["pyodide"]
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
@@ -23,12 +32,12 @@ def work_dir() -> Path:
 
 
 def testenv() -> Path:
-    return work_dir() / "testenv"
+    return work_dir() / "testenv" / PYTHON
 
 
 def missing(what: str) -> None:
     """On CI a missing build is a failure; on a checkout without one, a skip that says what to run."""
-    msg = f"{what} (run tools/build_data.sh / tools/prepare_testenv.sh WORKDIR)"
+    msg = f"{what} (run tools/build_data.sh / tools/prepare_testenv.sh WORKDIR {PYTHON})"
     if os.environ.get("CI"):
         pytest.fail(msg)
     pytest.skip(msg)
@@ -72,8 +81,32 @@ def guest(flavor: str) -> Guest:
     return Guest(flavor)
 
 
+def lock() -> dict[str, Any]:
+    """This Python's pyodide-lock.json (the facts of a release are read, not written twice)."""
+    return json.loads((data_dir() / PYTHON / "pyodide-lock.json").read_text())
+
+
+def lock_version(name: str) -> str:
+    return lock()["packages"][name]["version"]
+
+
 def check_file(name: str) -> str:
-    return (HERE / "checks" / name).read_text()
+    """A script or expected output of tests/checks; @@NAME@@ is this Python's fact: PYFULL, PYTAG, LIB, BASE (the CDN
+    folder of the release), ABI (the wheels' platform tag), NUMPY (the lock's version)."""
+    text = (HERE / "checks" / name).read_text()
+    if "@@" not in text:
+        return text
+    facts = {
+        "PYFULL": PYTHONS[PYTHON]["full"],
+        "PYTAG": PYTAG,
+        "LIB": LIB,
+        "BASE": PYTHONS[PYTHON]["lock_base"],
+        "ABI": PYTHONS[PYTHON]["abi"],
+        "NUMPY": lock_version("numpy"),
+    }
+    for k, v in facts.items():
+        text = text.replace(f"@@{k}@@", v)
+    return text
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

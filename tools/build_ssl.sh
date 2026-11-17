@@ -36,7 +36,9 @@ RECIPE_PATCH2_SHA256=4a1a5045489803d77aa6255cc925f3d6553fd212cf604ebb74714d81946
 
 for t in uv curl git tar sha256sum; do command -v "$t" >/dev/null 2>&1 || die "$t is needed (uv: https://docs.astral.sh/uv/)"; done
 H=$(cd "$(dirname "$0")/.." && pwd)
-mkdir -p "$1" && W=$(cd "$1" && pwd)
+# one work folder per Python: the venv (pyodide-build wants the xbuildenv's own Python), the xbuildenv and the OpenSSL libraries
+# (built with that Emscripten) of one Python must never be reused for the other
+mkdir -p "$1/$PYVER" && W=$(cd "$1/$PYVER" && pwd)
 OUT=${3:-$H/src/pyodide_nojs/data/$PYVER/tls}
 SO=_ssl.cpython-${PYVER%.*}${PYVER#*.}-wasm32-emscripten.so
 [ -f "$OUT/$SO" ] && [ -f "$OUT/ssl.py" ] && { echo "build_ssl.sh: $OUT is built"; exit 0; }

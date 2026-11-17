@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import Guest
+from conftest import LIB, ZIP, Guest
 
 from pyodide_nojs import Pyodide
 from pyodide_nojs._host import BASE_ENV
@@ -125,7 +125,7 @@ def test_guest_environment_is_pyodides_and_isolated(guest: Guest, monkeypatch: p
     assert not {"PYTHONHOME", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"} & set(names)
     assert home == "/home/pyodide /home/pyodide web_user ['/']"
     p = eval(path)  # noqa: S307
-    assert p == ["", "/lib/python3.15/site-packages", "/lib/python315.zip", "/lib/python3.15/lib-dynload"]
+    assert p == ["", f"{LIB}/site-packages", ZIP, f"{LIB}/lib-dynload"]
     assert "pyodide" in eval(listing.rsplit(" ", 1)[0])  # noqa: S307
 
 
@@ -138,7 +138,7 @@ def test_inherit_env_and_env_flags(guest: Guest, monkeypatch: pytest.MonkeyPatch
         "import os; e = os.environ; print(*map(e.get, ('WASMHOST_TEST_SECRET', 'K', 'PYTHONPATH', 'LD_LIBRARY_PATH')))"
     )
     r = guest.run(code, None, "--inherit-env", "--env", "K=v", "--env", "WASMHOST_TEST_SECRET=mine")
-    assert (r.returncode, r.stdout.strip()) == (0, "mine v None /usr/lib:/lib/python3.15/site-packages"), r.stderr
+    assert (r.returncode, r.stdout.strip()) == (0, f"mine v None /usr/lib:{LIB}/site-packages"), r.stderr
     r = guest.run(code, None, "--env", "K=v")
     assert r.stdout.split()[:3] == ["None", "v", "None"], r.stderr
 

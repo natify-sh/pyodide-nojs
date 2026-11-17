@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import sidemod
-from conftest import Guest
+from conftest import LIB, PYTHON, ZIP, Guest
 from wasmtime import wat2wasm
 
 from pyodide_nojs import Pyodide
@@ -121,7 +121,9 @@ r, w = os.pipe()
 print(select.select([r], [w], [], 0) == ([], [w], []))
 """
     r = guest.run(code)
-    assert (r.returncode, r.stdout.splitlines()) == (0, ["[(3, 32)]", "EBADF", "True"]), r.stderr
+    # 3.14 (as the real Pyodide 314, measured): select() of that number is no error
+    want = ["[(3, 32)]", "True"] if PYTHON == "3.14" else ["[(3, 32)]", "EBADF", "True"]
+    assert (r.returncode, r.stdout.splitlines()) == (0, want), r.stderr
 
 
 def test_pread_and_pwrite_check_the_offset(guest: Guest) -> None:
@@ -195,8 +197,8 @@ import _pyodide_core
 # except sys.path: site-packages is ahead of the zip, so that the real _ssl of data/tls wins
 STARTUP_WANT = [
     "/home/pyodide/this.program /home/pyodide/this.program ['./this.program'] ['']",
-    "['', '/lib/python3.15/site-packages', '/lib/python315.zip'] /lib/python315.zip /home/pyodide []",
-    "/lib/python315.zip/zipimport.py /lib/python315.zip/zipimport.py /lib/python315.zip/os.py",
+    f"['', '{LIB}/site-packages', '{ZIP}'] {ZIP} /home/pyodide []",
+    f"{ZIP}/zipimport.py {ZIP}/zipimport.py {ZIP}/os.py",
     "True 1 /",
 ]
 
@@ -342,9 +344,9 @@ def test_site_folders_come_before_the_stdlib_zip(guest: Guest, tmp_path: Path) -
     code = "import sys, colorsys; print(sys.path[1:3]); print(getattr(colorsys, 'MARK', None))"
     r = guest.run(code, None, "--site", str(tmp_path))
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["['/lib/python3.15/site-packages', '/lib/python315.zip']", "from the site folder"]
+    assert r.stdout.splitlines() == [f"['{LIB}/site-packages', '{ZIP}']", "from the site folder"]
     r = guest.run(code)
-    assert r.stdout.splitlines() == ["['/lib/python3.15/site-packages', '/lib/python315.zip']", "None"], r.stderr
+    assert r.stdout.splitlines() == [f"['{LIB}/site-packages', '{ZIP}']", "None"], r.stderr
 
 
 def test_a_site_folders_own_sitecustomize_runs_beside_ours(guest: Guest, tmp_path: Path) -> None:
@@ -375,7 +377,7 @@ def test_a_site_folders_pyodide_nojs_run_does_not_hijack_the_run(guest: Guest, t
 
 def test_frozen_modules_follow_the_stdlib_dir(guest: Guest) -> None:
     """Regression: `sys._stdlib_dir` is the zip (as Pyodide's), but the frozen modules were laid out under
-    /lib/python3.15 at init; a fresh import of importlib (the tests of importlib do it) asserted they agree."""
+    the stdlib folder at init; a fresh import of importlib (the tests of importlib do it) asserted they agree."""
     code = """
 import sys, zipimport
 st = zipimport.__spec__.loader_state.filename
@@ -384,6 +386,6 @@ import encodings
 print(encodings.__path__, encodings.__spec__.submodule_search_locations)
 """
     r = guest.run(code)
-    zipdir = "/lib/python315.zip/encodings"
-    want = f"/lib/python315.zip True\n['{zipdir}'] ['{zipdir}']"
+    zipdir = f"{ZIP}/encodings"
+    want = f"{ZIP} True\n['{zipdir}'] ['{zipdir}']"
     assert (r.returncode, r.stdout.strip()) == (0, want), r.stderr

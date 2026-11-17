@@ -58,7 +58,8 @@ Command line (`pyodide-nojs -h` has the text): `pyodide-nojs [OPTIONS] [--] [-c 
 ```python
 from pyodide_nojs import Pyodide
 
-with Pyodide() as py:  # Python 3.14 and "dynamic" by default; Pyodide("fused", python="3.15"), $PYODIDE_NOJS_FLAVOR, $PYODIDE_NOJS_PYTHON
+# Python 3.14 and "dynamic" by default; Pyodide("fused", python="3.15"), $PYODIDE_NOJS_FLAVOR, $PYODIDE_NOJS_PYTHON
+with Pyodide() as py:
     py.run("import json; print(json.dumps({'a': 1}))")  # 0 if it ran, 1 if it raised, N for sys.exit(N)
     py.run("import sys; sys.exit(3)")  # -> 3, the interpreter stays usable
 ```

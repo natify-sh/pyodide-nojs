@@ -1,10 +1,10 @@
-"""Pyodide's official test suite of CPython (python_tests.yaml and test_core_python.py of 315.0.0a2), on both builds.
+"""Pyodide's official test suite of CPython (python_tests.yaml and test_core_python.py of the pinned release).
 
-One guest process per test module (there is no fork and a crash must not take the rest with it), the same snippet as
-Pyodide's `test_cpython_core`: libregrtest with the entry's `skip` globs; an `xfail` entry is not run (reported as
-xfail, as Pyodide does; PYODIDE_SUITE_RUN_XFAIL=1 runs them and reports the truth), a module that skips at import or
-runs no tests is a skip. Our own per-test skips, each with its reason, are in suite_overrides.yaml. Not here: the tests
-of the JavaScript API and `@run_in_pyodide` (they need a browser or Node).
+On both builds. One guest process per test module (there is no fork and a crash must not take the rest with it), the
+same snippet as Pyodide's `test_cpython_core`: libregrtest with the entry's `skip` globs; an `xfail` entry is not run
+(reported as xfail, as Pyodide does; PYODIDE_SUITE_RUN_XFAIL=1 runs them and reports the truth), a module that skips
+at import or runs no tests is a skip. Our own per-test skips, each with its reason, are in suite_overrides.yaml. Not
+here: the tests of the JavaScript API and `@run_in_pyodide` (they need a browser or Node).
 
     uv run pytest -m suite                                    # all, both builds (about an hour on 4 cores)
     uv run pytest -m suite -k "fused and (test_abc or test_json)"
@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 from boot_modules import BOOT_MODULES
-from conftest import missing, testenv
+from conftest import LIB, PYTHON, missing, testenv
 
 from pyodide_nojs import FLAVORS
 
@@ -110,7 +110,10 @@ def load_overrides() -> dict[str, list[dict[str, Any]]]:
 
     if NO_OVERLAY:
         return {}
-    return yaml.safe_load((Path(__file__).parent / "suite_overrides.yaml").read_text())
+    records = yaml.safe_load((Path(__file__).parent / "suite_overrides.yaml").read_text())
+    # `python:` limits a record to one Python (python_tests.yaml differs between the releases: a module's name too)
+    out = {m: [r for r in rs if r.get("python", PYTHON) == PYTHON] for m, rs in records.items()}
+    return {m: rs for m, rs in out.items() if rs}
 
 
 ENTRIES = load_entries()
@@ -174,7 +177,7 @@ def test_cpython_core(suite_flavor: str, module: tuple[str, dict[str, Any]], rec
         "--site",
         str(t / "suite_ext"),
         "--mount",
-        f"/lib/python3.15/site-packages/test={t / 'suite' / 'test'}",
+        f"{LIB}/site-packages/test={t / 'suite' / 'test'}",
         "-c",
         dedent(GUEST).format(
             name=name,

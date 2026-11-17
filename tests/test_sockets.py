@@ -13,7 +13,7 @@ import time
 from collections.abc import Iterator
 
 import pytest
-from conftest import Guest
+from conftest import PYTHON, Guest
 
 
 class Peer(socketserver.BaseRequestHandler):
@@ -265,6 +265,8 @@ def test_poll_reports_a_hang_up(guest: Guest, port: int):
         # BSD refuses shutdown() on a socket whose peer has closed (ENOTCONN: CI run 42829422107); Linux accepts it.
         # and its poll says POLLHUP at once for the closed peer (Linux only after shutdown): CI run 42844873832
         assert out[:2] == ["[(True, True)] b''", "shutdown: ENOTCONN"], out
+    elif PYTHON == "3.14":  # no shutdown in Emscripten 5.0.3's libc (no __syscall_shutdown): ENOSYS, as in Pyodide 314
+        assert out == ["[(True, False)] b''", "shutdown: ENOSYS", "[False]"]
     else:
         assert out == ["[(True, False)] b''", "[True]"]
 

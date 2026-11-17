@@ -24,8 +24,8 @@ print("micropip: six, attrs, requests (+ urllib3, idna, certifi, charset-normali
 r = requests.get("https://pypi.org/pypi/micropip/json")
 print("requests.get", r.status_code, r.headers.get("content-type"), r.json()["info"]["name"])
 
-B = "https://cdn.jsdelivr.net/pyodide/v315.0.0a2/full/"
-asyncio.run(micropip.install(["pycparser", B + "cffi-2.0.0-cp315-cp315-pyemscripten_2026_5_wasm32.whl"]))
+B = "@@BASE@@"
+asyncio.run(micropip.install(["pycparser", B + "cffi-2.0.0-cp@@PYTAG@@-cp@@PYTAG@@-@@ABI@@.whl"]))
 import cffi  # noqa: E402
 
 ffi = cffi.FFI()

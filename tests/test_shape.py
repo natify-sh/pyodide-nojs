@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from conftest import PYTHON
 from wasmtime import FuncType, Module
 
 from pyodide_nojs import _engine, _wasm, available_flavors, data_dir
@@ -23,7 +24,7 @@ ALLOWED_ENV = {
 
 
 def need(name: str):
-    path = data_dir() / (name if name == "adapter.wasm" else f"3.15/{name}")
+    path = data_dir() / (name if name == "adapter.wasm" else f"{PYTHON}/{name}")
     if not path.exists():
         pytest.skip(f"{path} is not built (tools/build_data.sh)")
     return path
@@ -49,21 +50,27 @@ def test_fused_imports_only_wasi_loader_net():
     # the read of a terminal stdin)
     # (the dynamic build's adapter.wasm imports 15 of the 16: `call_any` is the trampoline's, and there the trampoline
     # is a separate module, which the fused build merges in)
-    assert counts == {"wasi_snapshot_preview1": 33, "loader": 16, "net": 19, "fs": 3}
+    want = {"wasi_snapshot_preview1": 33, "loader": 16, "net": 19, "fs": 3}
+    if PYTHON == "3.14":
+        # its main module imports no __syscall_linkat and no __syscall_shutdown (Emscripten 5.0.3's libc has neither):
+        # wasi.path_link and net.shutdown are unused and dropped
+        want["wasi_snapshot_preview1"] -= 1
+        want["net"] -= 1
+    assert counts == want
 
 
 def test_the_package_carries_what_the_run_time_needs():
     d = data_dir()
     for name in (
-        "3.15/pyodide.asm.wasm",
-        "3.15/python_stdlib.zip",
+        f"{PYTHON}/pyodide.asm.wasm",
+        f"{PYTHON}/python_stdlib.zip",
         "adapter.wasm",
-        "3.15/pyodide_fused.wasm",
+        f"{PYTHON}/pyodide_fused.wasm",
         "wasm-opt.wasm",
     ):
         if not (d / name).exists():
             pytest.skip(f"{d / name} is not built (tools/build_data.sh)")
-    assert available_flavors(d, "3.15") == ["fused", "dynamic"]
+    assert available_flavors(d, PYTHON) == ["fused", "dynamic"]
 
 
 def test_func_imports_come_from_the_module():

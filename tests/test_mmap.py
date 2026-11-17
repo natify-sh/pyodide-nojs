@@ -12,7 +12,7 @@ import re
 
 import conftest
 import pytest
-from conftest import Guest, missing
+from conftest import PYTHON, Guest, missing
 
 PRE = """
 import mmap, os
@@ -259,7 +259,7 @@ r = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTest
 print("PW_FAILED:", sorted(t.id().split(".")[-1] for t, _ in r.failures + r.errors))
 """
     p = Guest(flavor).run(
-        code, None, "--site", str(ext), "--mount", f"/lib/python3.15/site-packages/test={suite}", timeout=1800
+        code, None, "--site", str(ext), "--mount", f"{conftest.LIB}/site-packages/test={suite}", timeout=1800
     )
     m = re.search(r"^PW_FAILED: (.*)$", p.stdout, re.M)
     assert m, p.stdout[-2000:] + p.stderr[-2000:]
@@ -272,4 +272,6 @@ print("PW_FAILED:", sorted(t.id().split(".")[-1] for t, _ in r.failures + r.erro
         "test_resize_up_anonymous_mapping",
         "test_resize_up_private_anonymous_mapping",
     }
+    if PYTHON == "3.14":
+        mremap.add("test_basic")  # 3.14's test_basic calls m.resize(512) (ENOMEM here: no mremap); 3.15's does not
     assert set(failed) <= mremap | {"test_flush_parameters"}, failed

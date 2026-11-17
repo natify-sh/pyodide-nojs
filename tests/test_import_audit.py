@@ -10,10 +10,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import PYTHON
 from wasmtime import FuncType
 
 from pyodide_nojs import _engine, _wasm, data_dir
 
+# docs/import_audit.json audits the 3.15 main module's imports; the 3.14 one (another build) is not audited yet
+pytestmark = pytest.mark.skipif(PYTHON != "3.15", reason="docs/import_audit.json is written for the 3.15 build only")
 AUDIT = Path(__file__).resolve().parent.parent / "docs" / "import_audit.json"
 VERDICTS = {"full", "partial", "enosys", "stub", "n/a"}
 CLASSES = {"js-value", "js-bridge", "os", "runtime", "hook"}
@@ -23,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(scope="module")
 def built():
-    main, adapter = data_dir() / "3.15" / "pyodide.asm.wasm", data_dir() / "adapter.wasm"
+    main, adapter = data_dir() / PYTHON / "pyodide.asm.wasm", data_dir() / "adapter.wasm"
     if not (main.exists() and adapter.exists()):
         pytest.skip("not built (tools/build_data.sh)")
     imports = {n: (ps, rs) for mod, n, ps, rs in _wasm.func_imports(_engine.load_module(main)) if mod == "env"}
@@ -51,7 +54,7 @@ def glue_library():
     """The glue's functions the main module does not import (tools/audit_imports.py --library), from Pyodide's own
     pyodide.asm.mjs: PYODIDE_NPM_DIR, or the package the build fetched."""
     pkg = Path(os.environ.get("PYODIDE_NPM_DIR", ROOT / "pyo-build" / "dl" / "pyodide" / "package"))
-    wasm = data_dir() / "3.15" / "pyodide.asm.wasm"
+    wasm = data_dir() / PYTHON / "pyodide.asm.wasm"
     if not ((pkg / "pyodide.asm.mjs").exists() and wasm.exists()):
         pytest.skip("Pyodide's npm package is not fetched (tools/fetch.sh)")
     sys.path.insert(0, str(ROOT / "tools"))

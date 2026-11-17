@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import missing
+from conftest import PYTHON, missing
 from wasmtime import Module
 
 from pyodide_nojs import _engine, data_dir
@@ -19,7 +19,7 @@ HOST_GROUPS = (
 
 
 def host_imports(name: str) -> set[str]:
-    path = data_dir() / (name if name == "adapter.wasm" else f"3.15/{name}")
+    path = data_dir() / (name if name == "adapter.wasm" else f"{PYTHON}/{name}")
     if not path.exists():
         missing(f"{path} is not built")
     return {

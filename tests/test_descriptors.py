@@ -7,7 +7,7 @@ from __future__ import annotations
 import sys
 
 import pytest
-from conftest import Guest
+from conftest import PYTHON, Guest
 
 HEAD = """
 import os, fcntl, stat, errno, select, struct, termios, sys, shutil, ctypes
@@ -171,11 +171,12 @@ ctypes.set_errno(0)
 print(libc.pipe2(None, 0), ctypes.get_errno())
 """,
     )
-    assert out == [
-        "(0, 1, 0, 0) (2048, 2049, 0, 0) (0, 1, 1, 1) (2048, 2049, 1, 1)",
-        "138 138 138",
-        "-1 21",
-    ]
+    if PYTHON == "3.14":
+        # its libc (Emscripten 5.0.3) has no pipe2 syscall: O_CLOEXEC is lost, other flags are 28 (as in Pyodide 314)
+        want = ["(0, 1, 0, 0) (2048, 2049, 0, 0) (0, 1, 0, 0) (2048, 2049, 0, 0)", "28 28 28", "-1 21"]
+    else:
+        want = ["(0, 1, 0, 0) (2048, 2049, 0, 0) (0, 1, 1, 1) (2048, 2049, 1, 1)", "138 138 138", "-1 21"]
+    assert out == want
 
 
 def test_pipes_and_their_descriptors_are_freed(guest: Guest) -> None:
@@ -765,7 +766,12 @@ for n in (3, 4, -1, 99, 1100, 4095, 4096, 5000, 2**31 - 1, -2**31):
 print("different:", bad)
 """,
     )
-    assert out == ["different: 0"]
+    # 3.14 (as the real Pyodide 314, measured): a negative number is a path or no error in these three (3.15: EBADF)
+    assert out == (
+        ["DIFFERENT listdir -1 []", "DIFFERENT fchdir -1 OSError ENOENT", "DIFFERENT utime -1 None", "different: 3"]
+        if PYTHON == "3.14"
+        else ["different: 0"]
+    )
 
 
 def test_an_open_object_that_is_no_directory_as_dir_fd_is_enotdir_and_a_closed_number_ebadf(guest: Guest) -> None:

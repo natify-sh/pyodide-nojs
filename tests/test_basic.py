@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from conftest import Guest
+from conftest import PYTHON, Guest
 
 import pyodide_nojs as pw
 
@@ -20,7 +20,7 @@ def test_versions():
 def test_hello(guest: Guest):
     p = guest.run("import sys; print(sys.platform, sys.version_info[:2], sum(range(10)))")
     assert p.returncode == 0, p.stderr
-    assert p.stdout.split() == ["emscripten", "(3,", "15)", "45"]
+    assert p.stdout.split() == ["emscripten", "(3,", f"{PYTHON.split('.')[1]})", "45"]
 
 
 def test_stdlib_from_the_zip(guest: Guest):

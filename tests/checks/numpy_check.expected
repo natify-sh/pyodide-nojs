@@ -1,4 +1,4 @@
-python 3.15.0rc1 numpy 2.4.3
+python @@PYFULL@@ numpy @@NUMPY@@
 sum 499999500000.0 mean 499999.5 std 288675.135
 matmul [[14, 38, 62], [38, 126, 214], [62, 214, 366]]
 linalg inv [[0.6, -0.2], [-0.2, 0.4]]

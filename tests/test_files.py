@@ -485,7 +485,9 @@ assert libc.unlinkat(-100, (B + '/f').encode(), 0x200) == -1 and ctypes.get_errn
 os.mkdir(B + '/d')
 assert libc.unlinkat(-100, (B + '/d').encode(), 0x200) == 0 and not os.path.exists(B + '/d')
 libc.linkat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
-if not WIN:  # NO_WIN_SYMLINK
+if sys.version_info < (3, 15):  # 3.14's libc (Emscripten 5.0.3) has no linkat syscall: -1, as in Pyodide 314
+    assert libc.linkat(-100, (B + '/f').encode(), -100, (B + '/h1').encode(), 0) == -1
+elif not WIN:  # NO_WIN_SYMLINK
     os.symlink('f', B + '/l')
     assert libc.linkat(-100, (B + '/l').encode(), -100, (B + '/h1').encode(), 0x400) == 0  # AT_SYMLINK_FOLLOW
     assert not os.path.islink(B + '/h1') and os.stat(B + '/h1').st_ino == os.stat(B + '/f').st_ino
