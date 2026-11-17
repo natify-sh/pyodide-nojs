@@ -1,35 +1,44 @@
 #!/bin/sh
 # The guest's real _ssl, the official way (the one exception to "one toolchain: wasi-sdk 34", owner 2026-11-16): pyodide-build and
-# Emscripten 6.0.5, as pyodide-recipes builds its packages, with the new wasm exceptions, against a static OpenSSL 3.5.9:
-#   sh tools/build_ssl.sh WORKDIR [OUT]        OUT defaults to src/pyodide_nojs/data/3.15/tls
-# OUT holds exactly _ssl.cpython-315-wasm32-emscripten.so and CPython's own Lib/ssl.py (Pyodide 314+ ships a stub _ssl and its own
-# ssl.py, which refuse handshakes). Needs: uv, curl, git, tar, network (PyPI, GitHub, python.org, storage.googleapis.com); 4 GB of disk.
+# Emscripten (5.0.3 for Python 3.14, 6.0.5 for 3.15), as pyodide-recipes builds its packages, with the new wasm exceptions, against a
+# static OpenSSL 3.5.9:
+#   sh tools/build_ssl.sh WORKDIR PYVER [OUT]  PYVER 3.14 or 3.15; OUT defaults to src/pyodide_nojs/data/PYVER/tls
+# OUT holds exactly _ssl.cpython-3NN-wasm32-emscripten.so and CPython's own Lib/ssl.py (Pyodide 314+ ships a stub _ssl and its own
+# ssl.py, which refuse handshakes). One _ssl.so serves one Python only (3.15's needs C API that 3.14 lacks). Needs: uv, curl, git, tar, network (PyPI, GitHub, python.org, storage.googleapis.com); 4 GB of disk.
 # Steps: Python 3.15 and pyodide-build in a venv; the xbuildenv and emsdk; libopenssl.a by `pyodide build-recipes` from the recipe of
 # pyodide-recipes at a pinned commit (version and checksum edited, patch 0001 dropped: 3.5.9 has getentropy); then _ssl.c in two emcc calls
 # with the flags the xbuildenv's own CPython was built with. Idempotent: every step is skipped when its result is there.
 # A bump of Pyodide/Python moves PYODIDE_BUILD, XBUILDENV, EMSCRIPTEN, CPYTHON_* together (CLAUDE.md).
 set -eu
 
-PYODIDE_BUILD=0.39.3          # pairs with the Pyodide release below
-XBUILDENV=315.0.0a2           # = PYODIDE_VERSION
-EMSCRIPTEN=6.0.5              # what that xbuildenv installs (checked)
-HOST_PYTHON=3.15              # pyodide-build wants its own major.minor for the xbuildenv
+die() { echo "build_ssl.sh: $*" >&2; exit 1; }
+[ -n "${1:-}" ] && [ -n "${2:-}" ] || die "usage: sh tools/build_ssl.sh WORKDIR PYVER [OUT]   (PYVER 3.14 or 3.15)"
+PYVER=$2
+# per Python: the pyodide-build that pairs with the xbuildenv (= PYODIDE_VERSION), the Emscripten that xbuildenv installs (checked),
+# the Python pyodide-build runs on (the xbuildenv's own major.minor), and the CPython release whose _ssl.c and ssl.py are used
+case $PYVER in
+3.14)
+  PYODIDE_BUILD=0.39.3 XBUILDENV=314.0.7 EMSCRIPTEN=5.0.3 HOST_PYTHON=3.14
+  CPYTHON_VER=3.14.2    # sha256 as python.org lists it (Python-3.14.2.tgz.spdx.json)
+  CPYTHON_SHA256=c609e078adab90e2c6bacb6afafacd5eaf60cd94cf670f1e159565725fcd448d ;;
+3.15)
+  PYODIDE_BUILD=0.39.3 XBUILDENV=315.0.0a2 EMSCRIPTEN=6.0.5 HOST_PYTHON=3.15
+  CPYTHON_VER=3.15.0rc1
+  CPYTHON_SHA256=32c2b9878bbd6ac3ceb138c5b6c880345ce9d33388b399378c0da6fc7cb3bfbc ;;
+*) die "PYVER is 3.14 or 3.15" ;;
+esac
 OPENSSL_VER=3.5.9
 OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 RECIPES_COMMIT=c1b6558b049a5b202732a18954a781241a8deea0   # pyodide/pyodide-recipes, packages/libopenssl (3.6.2 there)
 RECIPE_META_SHA256=16dfb53942a765969949d5a9ff0d89d34ca8e143fb5fd50a2ddafd8ba8c08fd6
 RECIPE_PATCH2=0002-Use-send-recv-for-Emscripten-sockets.patch
 RECIPE_PATCH2_SHA256=4a1a5045489803d77aa6255cc925f3d6553fd212cf604ebb74714d819460bd2c
-CPYTHON_VER=3.15.0rc1         # = PYVER; its _ssl.c and ssl.py
-CPYTHON_SHA256=32c2b9878bbd6ac3ceb138c5b6c880345ce9d33388b399378c0da6fc7cb3bfbc
 
-die() { echo "build_ssl.sh: $*" >&2; exit 1; }
 for t in uv curl git tar sha256sum; do command -v "$t" >/dev/null 2>&1 || die "$t is needed (uv: https://docs.astral.sh/uv/)"; done
-[ -n "${1:-}" ] || die "usage: sh tools/build_ssl.sh WORKDIR [OUT]"
 H=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$1" && W=$(cd "$1" && pwd)
-OUT=${2:-$H/src/pyodide_nojs/data/3.15/tls}
-SO=_ssl.cpython-315-wasm32-emscripten.so
+OUT=${3:-$H/src/pyodide_nojs/data/$PYVER/tls}
+SO=_ssl.cpython-${PYVER%.*}${PYVER#*.}-wasm32-emscripten.so
 [ -f "$OUT/$SO" ] && [ -f "$OUT/ssl.py" ] && { echo "build_ssl.sh: $OUT is built"; exit 0; }
 fetch() { # URL FILE SHA256
   [ -f "$2" ] && echo "$3  $2" | sha256sum -c >/dev/null 2>&1 && return 0

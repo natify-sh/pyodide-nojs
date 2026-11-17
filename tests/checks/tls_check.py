@@ -1,5 +1,5 @@
 # HTTPS made by the guest itself: its sockets (the adapter over the host's socket operations) and its TLS (the real
-# _ssl of data/tls: CPython 3.15's, OpenSSL 3.5.9 static). No host fetch.
+# _ssl of data/<python>/tls: CPython's own, OpenSSL 3.5.9 static). No host fetch.
 import socket
 import ssl
 import urllib.request

@@ -274,18 +274,13 @@ class Pyodide:
         them ahead of the `site=` folders, `_at_start` puts site-packages ahead of the stdlib zip's stub, `_own_key`
         keys the snapshot."""
         found = []
-        for d, build in ((self.vdata / "tls", "tools/build_ssl.sh"), (self.data / "py", "tools/build_data.sh")):
+        for d, build in (
+            (self.vdata / "tls", f"tools/build_ssl.sh pyo-build {self.python}"),
+            (self.data / "py", "tools/build_data.sh pyo-build"),
+        ):
             name = d.name
-            if name == "tls" and self.python == "3.14" and not d.is_dir():
-                log.warning(
-                    "pyodide-nojs: Python 3.14 has no data/3.14/tls (the real _ssl is not built for it): "
-                    "`import ssl` is the stdlib zip's stub, TLS does not work"
-                )
-                continue
             if not d.is_dir():
-                raise FileNotFoundError(
-                    f"the guest's {name} files are missing: no {d}; build them with `sh {build} pyo-build`"
-                )
+                raise FileNotFoundError(f"the guest's {name} files are missing: no {d}; build them with `sh {build}`")
             found.append(d)
         return found
 

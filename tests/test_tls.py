@@ -1,4 +1,5 @@
-"""The guest's `ssl` is always the real one (`_ssl` with OpenSSL 3.5.9 and `ssl.py`, from data/tls), on both builds."""
+"""The guest's `ssl` is always the real one (`_ssl` with OpenSSL 3.5.9 and `ssl.py`, from data/<python>/tls), on both
+builds and both Pythons (the snapshot and folder tests below are 3.15's)."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import Guest, check_file
+from conftest import Guest, check_file, missing
 
 from pyodide_nojs import Pyodide, data_dir
 
@@ -16,6 +17,14 @@ pytestmark = pytest.mark.skipif(
     not (data_dir() / "3.15" / "tls").is_dir() and not os.environ.get("CI"),
     reason="no data/tls (run tools/build_ssl.sh pyo-build)",
 )
+
+
+@pytest.fixture(params=["3.14", "3.15"])
+def py(request: pytest.FixtureRequest) -> str:
+    if not (data_dir() / request.param / "tls").is_dir():
+        missing(f"no data/{request.param}/tls (run tools/build_ssl.sh pyo-build {request.param})")
+    return request.param
+
 
 # a TLS 1.3 handshake of a client and a server over memory BIOs, both in the guest; CERT/KEY are set by the test
 LOOPBACK = """
@@ -56,22 +65,27 @@ def cert(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     return d / "c.pem", d / "k.pem"
 
 
-def test_the_default_guest_has_the_real_ssl(guest: Guest):
+def test_the_default_guest_has_the_real_ssl(guest: Guest, py: str):
     code = """
 import ssl
 print(ssl.__file__, ssl.OPENSSL_VERSION)
-print("sigalgs", len(ssl.get_sigalgs()) > 0)
-print("mlkem", [g for g in ssl.create_default_context().get_groups() if "MLKEM" in g.upper()] != [])
+print("ciphers", len(ssl.create_default_context().get_ciphers()) > 0)
+if hasattr(ssl, "get_sigalgs"):  # 3.15's API
+    print("sigalgs", len(ssl.get_sigalgs()) > 0)
+    print("mlkem", [g for g in ssl.create_default_context().get_groups() if "MLKEM" in g.upper()] != [])
 """
-    p = guest.run(code)
+    p = guest.run(code, None, "--python", py)
     assert p.returncode == 0, p.stderr[-2000:]
-    assert "/lib/python3.15/site-packages/ssl.py OpenSSL 3.5" in p.stdout
-    assert "sigalgs True" in p.stdout and "mlkem True" in p.stdout
+    assert f"/lib/python{py}/site-packages/ssl.py OpenSSL 3.5" in p.stdout and "ciphers True" in p.stdout
+    assert ("sigalgs True" in p.stdout and "mlkem True" in p.stdout) == (py == "3.15")
     assert "converted legacy exceptions" not in p.stderr  # the .so is built with the new exceptions
+    assert (
+        "stdlib zip's stub" not in p.stderr and "no data/" not in p.stderr
+    )  # 3.14 warns when its data/3.14/tls is missing
 
 
-def test_loopback_handshake_and_hostname_check(guest: Guest, cert: tuple[Path, Path]):
-    mount = ("--mount", f"/certs={cert[0].parent}")
+def test_loopback_handshake_and_hostname_check(guest: Guest, cert: tuple[Path, Path], py: str):
+    mount = ("--mount", f"/certs={cert[0].parent}", "--python", py)
     for name, good in (("localhost", True), ("wrong.example", False)):
         p = guest.run(f"CERT, KEY, NAME = '/certs/c.pem', '/certs/k.pem', {name!r}\n" + LOOPBACK, None, *mount)
         if good:
@@ -81,14 +95,14 @@ def test_loopback_handshake_and_hostname_check(guest: Guest, cert: tuple[Path, P
             assert p.returncode != 0 and "SSLCertVerificationError" in p.stderr
 
 
-def test_default_context_loads_the_cas(guest: Guest):
-    p = guest.run("import ssl; print(ssl.create_default_context().cert_store_stats())")
+def test_default_context_loads_the_cas(guest: Guest, py: str):
+    p = guest.run("import ssl; print(ssl.create_default_context().cert_store_stats())", None, "--python", py)
     assert p.returncode == 0, p.stderr[-2000:]
     assert "'x509_ca': 0" not in p.stdout and "'x509_ca'" in p.stdout
 
 
-def test_two_interpreters_in_one_process(flavor: str, capfd: pytest.CaptureFixture[str]):
-    with Pyodide(flavor) as a, Pyodide(flavor) as b:
+def test_two_interpreters_in_one_process(flavor: str, py: str, capfd: pytest.CaptureFixture[str]):
+    with Pyodide(flavor, python=py) as a, Pyodide(flavor, python=py) as b:
         assert a.run("import ssl; print(ssl.OPENSSL_VERSION)") == 0
         assert b.run("import ssl; print(ssl.OPENSSL_VERSION)") == 0
         assert a.converted == b.converted == 0
@@ -138,8 +152,8 @@ def test_snapshot_key_follows_the_bundled_py_files(flavor: str, tmp_path: Path):
 
 
 @pytest.mark.network
-def test_https_to_pypi(guest: Guest):
-    p = guest.run(check_file("tls_check.py"))
+def test_https_to_pypi(guest: Guest, py: str):
+    p = guest.run(check_file("tls_check.py"), None, "--python", py)
     assert p.returncode == 0, p.stderr[-2000:]
     assert "OpenSSL 3.5" in p.stdout and "handshake TLSv1.3" in p.stdout and "urllib 200 six" in p.stdout
     assert "hostname check works" in p.stdout

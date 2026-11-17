@@ -4,7 +4,7 @@ name: Build wasm
 #   wasm-opt   Binaryen 132 as wasm32-wasip1 with wasi-sdk 34 (about 12 min; cached by the hash of its script, the wasi-sdk lines of fetch.sh and the npm Binaryen version)
 #   data       pyodide.asm.wasm (exnref), python_stdlib.zip, adapter.wasm (wasi-sdk's clang), pyodide_fused.wasm, wasm-opt.wasm,
 #              pyodide-lock.json
-#   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten 6.0.5: tools/build_ssl.sh) -> data/3.15/tls; the static
+#   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten: tools/build_ssl.sh, once per Python) -> data/3.14/tls, data/3.15/tls; the static
 #              OpenSSL libraries are cached by the hash of the script (every pin is in it)
 #   testenv    numpy, cffi, the `test` package and a venv, installed by the pip of a real `pyodide venv` (uv's Python 3.15, pyodide-build, Node);
 #              openssl and python_tests.yaml (tools/prepare_testenv.sh)
@@ -59,8 +59,12 @@ jobs:
           retention-days: 14
 
   ssl:
-    name: _ssl (OpenSSL 3.5.9)
+    name: _ssl (OpenSSL 3.5.9, Python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.14", "3.15"]
     steps:
       - uses: actions/checkout@v7
 
@@ -72,14 +76,14 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ssl-work/rc/.libs
-          key: ssl-libs-${{ hashFiles('tools/build_ssl.sh') }}
+          key: ssl-libs-${{ matrix.python }}-${{ hashFiles('tools/build_ssl.sh') }}
 
       - name: Build _ssl and ssl.py
-        run: sh tools/build_ssl.sh ssl-work "$PWD/tls"
+        run: sh tools/build_ssl.sh ssl-work ${{ matrix.python }} "$PWD/tls"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: tls
+          name: tls-${{ matrix.python }}
           path: tls
           retention-days: 14
 
@@ -106,7 +110,12 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: tls
+          name: tls-3.14
+          path: src/pyodide_nojs/data/3.14/tls
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tls-3.15
           path: src/pyodide_nojs/data/3.15/tls
 
       - name: Build the package's wasm
