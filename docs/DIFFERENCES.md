@@ -1,6 +1,6 @@
 # Differences from Pyodide
 
-What answers differently here than in the real Pyodide 315.0.0-alpha.2 on Node (MEMFS), and why. It was made by running the same
+What answers differently here than in the real Pyodide 315.0.0-alpha.2 on Node (MEMFS), and why (the probes were run for 3.15 only; 3.14 runs on the same adapter and was not compared with Pyodide 314). It was made by running the same
 probe programs on both and reading the diff: about 5,700 cases of files and descriptors, 2,750 of the loader, `mmap`, the standard
 streams and `poll`, and about 7,500 per time-zone run of the runtime (time functions: no difference in 7 time zones). Fused and dynamic gave the same answers on
 every probe. Most of what the probes found is fixed and kept by a test; this file lists what is still different. The per-import
@@ -64,7 +64,7 @@ Pyodide's defects are not copied: chosen on purpose.
 | `access(f, X_OK)` on a plain file | `EACCES` | ok |
 | `/home` | `pyodide` only | `pyodide` and `web_user` |
 | a program that ends with all 4,093 descriptor numbers in use | fails in the wrapper (status 255) | runs |
-| Python 3.14 (Pyodide 314) | not supported: it traps at start on a signature mismatch | runs its own |
+| Python 3.13 (Pyodide 313) | not covered (its main module lacks 32 of 3.15's imports and has another trampoline mechanism) | runs its own |
 
 ## Where Pyodide dies and the guest answers
 

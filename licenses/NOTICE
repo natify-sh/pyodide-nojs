@@ -1,18 +1,18 @@
 pyodide-nojs bundles binaries built from other projects. Each keeps its own license:
 
-* pyodide.asm.wasm, python_stdlib.zip, pyodide_fused.wasm (which contains pyodide.asm.wasm): Pyodide 315.0.0-alpha.2,
+* data/<ver>/pyodide.asm.wasm, python_stdlib.zip, pyodide_fused.wasm (which contains pyodide.asm.wasm), for two Pythons: Pyodide 314.0.7 (3.14) and 315.0.0-alpha.2 (3.15),
   MPL-2.0 (Pyodide-LICENSE-MPL-2.0.txt). Pyodide's CPython is under the PSF license (CPython-LICENSE-PSF.txt); the
-  Emscripten runtime (6.0.5; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
+  Emscripten runtime (6.0.5 in the 3.15 build; 5.0.3 is the one of the 3.14 xbuildenv, not checked in the 3.14 main module; MIT and University of Illinois/NCSA: Emscripten-LICENSE-MIT-NCSA.txt) and musl libc
   (MIT: musl-COPYRIGHT-MIT.txt) compiled into pyodide.asm.wasm. The files are
   Pyodide's own, with the legacy wasm exceptions converted to exnref (Binaryen 132), and pyodide.asm.wasm also has one patch: libc's
   `setsockopt` stub is turned into an import (tools/patch_main.mjs); fused is also merged with adapter.wasm.
-  Source: https://github.com/pyodide/pyodide (tag 315.0.0a2), https://www.npmjs.com/package/pyodide/v/315.0.0-alpha.2
+  Source: https://github.com/pyodide/pyodide (tags 314.0.7 and 315.0.0a2), https://www.npmjs.com/package/pyodide/v/314.0.7, https://www.npmjs.com/package/pyodide/v/315.0.0-alpha.2
   CPython's own bundled third-party libraries are compiled into pyodide.asm.wasm too (symbols of expat, zlib, bzip2, liblzma,
   SQLite, Zstandard and libffi are in the binary): their license texts are in CPython-incorporated-software-LICENSES.txt
-  (CPython's Doc/license.rst of 3.15.0rc1, with the expat text inserted, and bzip2 and Zstandard added; SQLite and liblzma
+  (CPython's Doc/license.rst of 3.15.0rc1; the 3.14 build's libraries are the same set, the text was not compared, with the expat text inserted, and bzip2 and Zstandard added; SQLite and liblzma
   are in the public domain and have no text).
-* pyodide-lock.json: the package lock of the same Pyodide release (MPL-2.0, as above; JSON data, unchanged), from the
-  release's files (npm `pyodide` 315.0.0-alpha.2, tools/fetch.sh).
+* data/<ver>/pyodide-lock.json: the package lock of the same Pyodide release (MPL-2.0, as above; JSON data, unchanged), from the
+  release's files (npm `pyodide` 314.0.7 and 315.0.0-alpha.2, tools/fetch.sh).
 * data/py/ (micropip 0.11.1 and packaging 26.1, unpacked unchanged from the wheels of the same Pyodide release, whose sha256 are checked
   against the lock by tools/bundle_py.py): micropip is MPL-2.0 (its LICENSE is the same text as Pyodide-LICENSE-MPL-2.0.txt; micropip also
   vendors a copy of packaging under micropip/_vendored/packaging); packaging is Apache-2.0 OR BSD-2-Clause (packaging-LICENSE-Apache-2.0.txt,
@@ -22,10 +22,10 @@ pyodide-nojs bundles binaries built from other projects. Each keeps its own lice
   BSD-2-Clause for cloudlibc), libc++, libc++abi and libunwind of wasi-sdk (Apache-2.0 with LLVM exceptions, and the dual
   MIT / University of Illinois license): the texts are in wasi-sdk-runtime-LICENSES.txt.
   Source: https://github.com/WebAssembly/binaryen (tag version_132), https://github.com/WebAssembly/wasi-sdk (tag wasi-sdk-34)
-* data/tls/_ssl.cpython-315-wasm32-emscripten.so and ssl.py (the guest's TLS, built by tools/build_ssl.sh with pyodide-build and Emscripten 6.0.5): CPython 3.15.0rc1's
+* data/<ver>/tls/_ssl.cpython-314-wasm32-emscripten.so and _ssl.cpython-315-wasm32-emscripten.so, each with its ssl.py (the guest's TLS, built by tools/build_ssl.sh with pyodide-build and Emscripten 5.0.3 for 3.14, 6.0.5 for 3.15): CPython 3.14.2's and 3.15.0rc1's
   Modules/_ssl.c linked statically with OpenSSL 3.5.9 (Apache-2.0: OpenSSL-LICENSE-Apache-2.0.txt), built with the recipe of
   pyodide-recipes packages/libopenssl (MPL-2.0; its patch 0002 makes Emscripten sockets use send/recv). _ssl.c and CPython's own ssl.py are
   under the PSF license (CPython-LICENSE-PSF.txt). Source: https://github.com/openssl/openssl (tag openssl-3.5.9),
-  https://github.com/pyodide/pyodide-recipes, https://www.python.org/ftp/python/3.15.0/Python-3.15.0rc1.tgz
+  https://github.com/pyodide/pyodide-recipes, https://www.python.org/ftp/python/3.14.2/Python-3.14.2.tgz, https://www.python.org/ftp/python/3.15.0/Python-3.15.0rc1.tgz
 * adapter.wasm: built from wasm/adapter.c in this repository (MIT, see LICENSE) with wasi-sdk 34 (-nostdlib: no library is linked in).
 * The Python files of the wheel (pyodide_nojs/ and pyodide_nojs/guest/, which is copied into the guest) are this repository's (MIT).

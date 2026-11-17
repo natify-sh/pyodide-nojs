@@ -1,8 +1,8 @@
 # The OpenSSL of the guest's TLS, and what to tell Pyodide
 
-> **Status (2026-11-16).** The question is answered in the repository: the guest always has a real `_ssl` of CPython 3.15.0rc1 with a static
-> **OpenSSL 3.5.9**, built the official way (`tools/build_ssl.sh`: pyodide-build, Emscripten 6.0.5, the CFLAGS of the pinned Pyodide's
-> xbuildenv) into `data/tls/` with CPython's own `ssl.py`; the wheel carries it and `licenses/NOTICE` lists it. This file keeps what an
+> **Status (2026-11-16).** The question is answered in the repository: the guest always has real `_ssl` per Python (CPython 3.14.2's and 3.15.0rc1's) with a static
+> **OpenSSL 3.5.9**, built the official way (`sh tools/build_ssl.sh WORKDIR 3.14|3.15`: pyodide-build 0.39.3, Emscripten 5.0.3 for 3.14 and 6.0.5 for 3.15, the CFLAGS of the pinned Pyodide's
+> xbuildenv) into `data/<ver>/tls/` with CPython's own `ssl.py`; the wheel carries it and `licenses/NOTICE` lists it. This file keeps what an
 > upstream issue to Pyodide needs: where Pyodide's OpenSSL stands, what an old one lacks, the sizes, the one trap we met, and the outline of the
 > proposal. The research was done on 2026-11-11 from GitHub pages (no raw API access); version, CVE and support-window facts were not
 > re-checked since, and the numbers of section 3 are from a prototype that is gone, except the shipped file's size.
@@ -50,8 +50,8 @@
 
 ## 3. What was built and measured
 
-The shipped build: `_ssl.cpython-315-wasm32-emscripten.so` with a static OpenSSL 3.5.9, **4,057,787 bytes** (`ls -l src/pyodide_nojs/data/tls/`),
-loaded by `pyodide.asm.wasm` through the ordinary `dlopen`; the main module does not change (9,995,716 bytes). It passes on both packagings: a TLS
+The shipped builds: `_ssl.cpython-315-wasm32-emscripten.so` with a static OpenSSL 3.5.9, **4,057,787 bytes** (`ls -l src/pyodide_nojs/data/3.15/tls/`),
+loaded by `pyodide.asm.wasm` through the ordinary `dlopen`; the main module does not change (9,995,716 bytes). For 3.14 the same recipe gives `_ssl.cpython-314-wasm32-emscripten.so`, **4,052,221 bytes** (`ls -l src/pyodide_nojs/data/3.14/tls/`; the 3.14 main module is 9,611,363 bytes). The sections above are about 315's lock; `get_sigalgs()` and `get_groups()` exist only in 3.15's `ssl.py`. The tests below ran for 3.15; `tests/test_tls.py` runs per Python (3.14's network test was not run: the sandbox has no DNS). It passes on both packagings: a TLS
 1.3 handshake to pypi.org, a local TLS server with a hostname refusal (`ssl.SSLCertVerificationError: Hostname mismatch`), `urllib`, `micropip`
 (`tests/test_tls.py`, `tests/checks/tls_check.py`). With no `/dev/urandom` of the host: OpenSSL seeds from `getentropy`.
 

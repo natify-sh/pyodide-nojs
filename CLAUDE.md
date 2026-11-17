@@ -7,19 +7,19 @@ the rest is wasmhost's practice carried over and open to the maintainer's correc
 
 ## What this is
 Pyodide's CPython run by wasmtime-py with no JavaScript: the Emscripten glue is a wasm adapter (`wasm/adapter.c`), the host is Python. Two packagings of the same sources, **fused** (one core module) and **dynamic**
-(`pyodide.asm.wasm` + `adapter.wasm`), both in the wheel. An alpha, meant as a ready solution for anything Pyodide runs without the browser's JavaScript.
+(`pyodide.asm.wasm` + `adapter.wasm`), both in the wheel, for two Pythons (3.14 the default, 3.15) with one adapter. An alpha, meant as a ready solution for anything Pyodide runs without the browser's JavaScript.
 
 The maintainer communicates in Ukrainian; code, comments, commit messages and docs are in English.
 
 ## Hard rules
 * **No run-time Python dependencies.** wasmtime-py is the `[wasmtime]` extra and a dev dependency; a missing engine says so (`_engine.require_wasmtime`). Python 3.12+ (the owner, 2026-11-16: it was 3.10+; `pyodide-build`, the optional `venv` extra, needs 3.12). (The owner, 2026-11-10 for the rest.)
-* **The run time needs wasmtime-py and the wasm files of the package** (`pyodide.asm.wasm`, `wasm-opt.wasm`, `python_stdlib.zip`, `adapter.wasm`, `pyodide_fused.wasm`, `pyodide-lock.json`, and the folders `data/tls` and `data/py`), **no Node and no native Binaryen**. Node and npm's Binaryen
+* **The run time needs wasmtime-py and the wasm files of the package** (`adapter.wasm`, `wasm-opt.wasm` and the folder `data/py`, shared, and in each of `data/3.14/` and `data/3.15/`: `pyodide.asm.wasm`, `pyodide_fused.wasm`, `python_stdlib.zip`, `pyodide-lock.json` and the folder `tls`), **no Node and no native Binaryen**. Node and npm's Binaryen
   (`wasm-opt`, `wasm-merge`) exist only in the build (`tools/*.sh`) and in CI. (The owner, 2026-11-10.)
-* **One toolchain: wasi-sdk 34's clang** builds every wasm we build (`adapter.wasm`, `wasm-opt.wasm`); no `clang` from the system. **One exception (the owner, 2026-11-16): the guest's `_ssl`** (with its OpenSSL 3.5.9, the version CPython's own CI builds against) is built the official way, as Pyodide builds its packages: `pyodide-build` and Emscripten 6.0.5, with the CFLAGS of the pinned Pyodide's xbuildenv, in the build and in CI only (a build tool, like Node); the result is a file in `data/`, never committed. (The owner, 2026-11-10 for the rule.)
+* **One toolchain: wasi-sdk 34's clang** builds every wasm we build (`adapter.wasm`, `wasm-opt.wasm`); no `clang` from the system. **One exception (the owner, 2026-11-16): the guest's `_ssl`** (with its OpenSSL 3.5.9, the version CPython's own CI builds against) is built the official way, as Pyodide builds its packages: `pyodide-build` and Emscripten (6.0.5 for Python 3.15, 5.0.3 for 3.14), with the CFLAGS of the pinned Pyodide's xbuildenv, in the build and in CI only (a build tool, like Node); the result is a file in `data/`, never committed. (The owner, 2026-11-10 for the rule.)
 * **Both packagings are tested** wherever a test runs, and **Pyodide's official test suite** (`tests/test_pyodide_suite.py`, `python_tests.yaml`, libregrtest) runs on both, locally and in CI. A feature that works on one only is not done. (The owner, 2026-11-10.)
-* **The supported Pyodide is pinned in `package.json`** (Dependabot tracks it); the adapter answers that build's `env` imports. A bump needs the new release sha in `tools/fetch.sh`, `PYODIDE_VERSION`/`PYODIDE_ABI` in `src/pyodide_nojs/__init__.py`, `LOCK_BASE` (the jsDelivr URL of the lock and wheels) in
-  `src/pyodide_nojs/guest/pyodide_nojs_start.py`, `PYVER` and `PYVER_FULL` (in `src/pyodide_nojs/_consts.py`) if Python changes, and a green CI on both packagings. `tools/build_ssl.sh` pins the same release by hand (it goes with the Pyodide pin): `PYODIDE_BUILD` (the pyodide-build that pairs with it), `XBUILDENV`, `EMSCRIPTEN`,
-  and with `PYVER` the CPython tarball and its sha256 (`CPYTHON_VER`, `CPYTHON_SHA256`: `_ssl.c` and `ssl.py` come from it); the OpenSSL version and the pyodide-recipes commit with the sha256 of its recipe files change only on purpose.
+* **The supported Pyodide releases are pinned in `package.json`** (`pyodide` for 3.15, `pyodide-314` for 3.14; Dependabot tracks them); the adapter answers those builds' `env` imports. A bump needs the new release sha in `tools/fetch.sh` (it holds one per Python), the Python's row of the `PYTHONS` table in `src/pyodide_nojs/_consts.py` (`pyodide`, `abi`, `lock_base`: the jsDelivr URL of the lock and wheels, `full`: CPython's version;
+  `PYODIDE_VERSION`/`PYODIDE_ABI` in `__init__.py` follow the default's row), and a green CI on both packagings. `tools/build_ssl.sh WORKDIR PYVER` pins the same release by hand in a case block per Python (it goes with the Pyodide pin): `PYODIDE_BUILD` (the pyodide-build that pairs with it), `XBUILDENV`, `EMSCRIPTEN`,
+  and the CPython tarball and its sha256 (`CPYTHON_VER`, `CPYTHON_SHA256`: `_ssl.c` and `ssl.py` come from it); the OpenSSL version and the pyodide-recipes commit with the sha256 of its recipe files change only on purpose.
 * **State lives in the `Pyodide` object, never in module globals**: two interpreters in one process must work (`test_two_interpreters_in_one_process`).
 * **What cannot work is reported, not faked**: an import the adapter does not answer is a stub that returns 0/null (the JavaScript bridge: documented in BRIEF.md); a missing build or engine is an error that says what to run.
 * **The wheel carries built wasm that is not committed** (`src/pyodide_nojs/data/` is ignored; CI builds it). The bundled binaries keep their licenses (`licenses/NOTICE`): a new one gets its text and a line there.
@@ -100,12 +100,12 @@ uv sync                                                    # dev environment (ad
 uv run ruff check . && uv run ruff format --check .
 uv run pyright
 sh tools/build_data.sh pyo-build                                # the wasm of the package -> src/pyodide_nojs/data (needs node, npm; cmake + ninja for wasm-opt.wasm)
-sh tools/build_ssl.sh pyo-build                                 # the guest's real _ssl + ssl.py (OpenSSL 3.5.9; pyodide-build, Emscripten 6.0.5; needs uv, network, 4 GB) -> src/pyodide_nojs/data/tls
-sh tools/prepare_testenv.sh pyo-build                           # numpy, cffi/pycparser, the `test` package and a venv via `pyodide venv` and its pip (needs node, uv, network); openssl 1.1.1w (the ctypes test), python_tests.yaml -> pyo-build/testenv (micropip and the real _ssl are the package's own: data/py, data/tls)
+sh tools/build_ssl.sh pyo-build 3.14|3.15                       # the guest's real _ssl + ssl.py for one Python (OpenSSL 3.5.9; pyodide-build, Emscripten 5.0.3 / 6.0.5; needs uv, network, 4 GB) -> src/pyodide_nojs/data/<ver>/tls
+sh tools/prepare_testenv.sh pyo-build                           # numpy, cffi/pycparser, the `test` package and a venv via `pyodide venv` and its pip (needs node, uv, network); openssl 1.1.1w (the ctypes test), python_tests.yaml -> pyo-build/testenv (micropip and the real _ssl are the package's own: data/py, data/<ver>/tls)
 uv run pytest -m "not network and not suite"               # offline, both packagings
 uv run pytest -m network                                   # PyPI and jsDelivr
 uv run pytest -m suite                                     # Pyodide's official CPython suite, both packagings (long; -n auto spreads it over the cores; PYODIDE_SUITE_SHARD=I/N, PYODIDE_SUITE_FLAVORS=fused)
-uv run python -m pyodide_nojs [--flavor fused|dynamic] -c "print(1 + 1)"
+uv run python -m pyodide_nojs [--python 3.14|3.15] [--flavor fused|dynamic] -c "print(1 + 1)"
 uv build --wheel                                           # the wheel carries data/
 ```
 CI: `build.yml` (wasm-opt.wasm cached, data, testenv), `tests.yml` (offline on Linux/Windows/macOS, network, the suite in one job per packaging, spread over the cores by pytest-xdist), `pre-commit.yml`, `publish.yml` (on a tag: builds the wheel and attaches it to the GitHub release; PyPI publishing is commented out while this is an alpha; wheel only: the wasm is built, not committed).

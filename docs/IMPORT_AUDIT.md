@@ -5,6 +5,8 @@ package, `pyo-build/dl/pyodide/package`); the file is held to the built adapter 
 read from Pyodide's own JavaScript and from the signature (`js-value`: a JavaScript value, `externref`, crosses the boundary),
 not from the name. The verdict `n/a` entries are the zero/null stubs (the verdict `stub` is not used).
 
+The numbers on this page (264 imports, 95 answered, 169 n/a) are those of Pyodide 315.0.0-alpha.2 (Python 3.15); the audit has not been regenerated for 314.0.7. That build has 254 `env` imports: 11 fewer system calls than 3.15, and `__syscall_pipe`, which 315 lacks and the adapter answers as `pipe2` with no flags; `_gmtime_js` and `_localtime_js` are `void` there, and the adapter's `i32` result is dropped by the shim (README, Quick start).
+
 | verdict | meaning | imports |
 |---|---|---|
 | full | the same observable behaviour as Pyodide's JavaScript | 66 |

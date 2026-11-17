@@ -7,7 +7,7 @@ built wasm by `tests/test_host_contract.py`: every `loader`, `net`, `fs` and `au
 
 How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the built wasm of the pinned Pyodide and the adapter of that day):
 
-* **imports and signatures**: `Module(...).imports` of `src/pyodide_nojs/data/{pyodide_fused,adapter,pyodide.asm}.wasm` (wasmtime-py), counted by module; the signature columns below were compared with that list (all 38 match).
+* **imports and signatures**: `Module(...).imports` of `src/pyodide_nojs/data/{pyodide_fused,adapter,pyodide.asm}.wasm` (wasmtime-py), counted by module; the signature columns below were compared with that list (all 38 match). The counts of the imports of the main module (264 `env`, 14 WASI, 280 `GOT.func`) are 3.15's: 3.14's main module has 254 `env` imports, and its fused module imports 69 (the `net` operations are 18), the adapter being the same file.
 * **calls at run time**: a throw-away script (not in the repo) that wrapped every `loader`/`net`/`fs` function of `Pyodide._ops()` with a counter and ran `Pyodide(flavor=...).run(...)`; same result on both packagings (run again on 2026-11-16 for the two programs of section 4).
 * **the real Pyodide under Node** (section 4): counting wrappers around the glue's `wasmImports` of Pyodide 315.0.0-alpha.2, 2026-11-15; the script is not in the repository and the numbers were not re-measured here. The sizes of the host (section 5) are `wc -l` of the same day and of 2026-11-16.
 
@@ -26,15 +26,15 @@ How the numbers were made (written 2026-11-15, re-checked 2026-11-16 against the
 | WASI preview1 (`Linker.define_wasi`, `WasiConfig`: env, preopens `/` and the `mounts`, stdio) | `_start` | section 2 |
 | the machine-code cache in the user's cache dir | `_engine` | speed only, not a contract |
 
-### The files (the package's `data/`)
+### The files (the package's `data/`; `3.14/` and `3.15/` hold the per-Python ones)
 
 | file | needed by | role |
 |---|---|---|
-| `pyodide_fused.wasm` | fused | the main module, the adapter and the trampoline in one core module |
-| `pyodide.asm.wasm`, `adapter.wasm` | dynamic | Pyodide's main module as released, and the adapter linked to it by a WAT shim (`_wasm.py`) |
-| `python_stdlib.zip`, `pyodide-lock.json` | both | the standard library; the lock of the release (micropip) |
+| `<ver>/pyodide_fused.wasm` | fused | the main module, the adapter and the trampoline in one core module |
+| `<ver>/pyodide.asm.wasm`, `adapter.wasm` | dynamic | Pyodide's main module as released (per Python), and the adapter (one file for both Pythons) linked to it by a WAT shim (`_wasm.py`) |
+| `<ver>/python_stdlib.zip`, `<ver>/pyodide-lock.json` | both | the standard library; the lock of the release (micropip) |
 | `wasm-opt.wasm` | both, at run time only for a wheel with legacy exceptions | Binaryen, built with wasi-sdk, run in-process (no native Binaryen, no Node) |
-| `tls/` | both | the guest's real `_ssl` (OpenSSL 3.5.9) and CPython's `ssl.py`, copied into the guest's site-packages (`tools/build_ssl.sh`); a missing folder is a `FileNotFoundError` |
+| `<ver>/tls/` | both | the guest's real `_ssl` (OpenSSL 3.5.9) and CPython's `ssl.py`, copied into the guest's site-packages (`tools/build_ssl.sh`); a missing folder is a `FileNotFoundError` |
 | `py/` | both | `micropip` and `packaging`, copied into the guest's site-packages (`tools/build_data.sh`); a missing folder is a `FileNotFoundError` |
 
 Python files of the guest (`src/pyodide_nojs/guest/`, about 620 lines by `wc -l src/pyodide_nojs/guest/*` of 2026-11-16: `hostnet.py`, `pyodide_lock.py`, `pyodide_nojs_asyncio.py`, start and run, and the `.pth`) run inside the guest.
@@ -132,7 +132,7 @@ descriptor numbers, flags (`O_NONBLOCK`, `MSG_DONTWAIT`) and the table that dups
 
 HTTP(S) is not an import: the host's `fetch` (`_net.Net.fetch`, `urllib`) is a `Func` the host puts into a table slot
 and names to the guest in a file `_hostnet_slots.py` (`FETCH`, `FREE`); the guest calls it through ctypes
-(`guest/hostnet.py`). The guest always has a TLS of its own: the real `_ssl` (OpenSSL 3.5.9, `data/tls`), so the fetch is
+(`guest/hostnet.py`). The guest always has a TLS of its own: the real `_ssl` (OpenSSL 3.5.9, `data/<ver>/tls`), so the fetch is
 not needed for HTTPS; it stays as the opt-in `--pyfetch` route (and `hostnet.install()`), which uses the host's proxies,
 DNS and trusted roots and needs only `--http`, a narrower grant than `--tcp --dns`. Why not wasm: the proxies, the
 host's DNS and its trust store are the OS's facts.
