@@ -1,0 +1,166 @@
+"""Offline: the runtime imports of Emscripten's glue (`__assert_fail`, `_abort_js`, `exit`, `_emscripten_system`,
+`_emscripten_get_progname`, `emscripten_get_heap_max`, `emscripten_resize_heap`, `emscripten_date_now`), on both
+packagings.
+The expected values are what Pyodide 315.0.0a2 prints for the same calls."""
+
+from __future__ import annotations
+
+import pytest
+from conftest import Guest
+
+ASSERT = """
+import ctypes as c
+libc = c.CDLL(None)
+libc.__assert_fail.restype = None
+libc.__assert_fail(b"x == 1", b"file.c", 42, b"func")
+"""
+
+
+def test_a_failed_assert_says_what_javascript_says_and_aborts(guest: Guest) -> None:
+    r = guest.run(ASSERT)
+    assert r.returncode == 134  # the guest trapped
+    assert "Aborted(Assertion failed: x == 1, at: file.c,42,func)\n" in r.stderr
+
+
+def test_an_assert_without_names(guest: Guest) -> None:
+    r = guest.run(ASSERT.replace('b"x == 1", b"file.c", 42, b"func"', "None, None, -7, None"))
+    assert r.returncode == 134
+    assert "Aborted(Assertion failed: , at: unknown filename,-7,unknown function)\n" in r.stderr
+
+
+def test_abort_says_aborted(guest: Guest) -> None:
+    r = guest.run("import os; os.abort()")
+    assert r.returncode == 134
+    assert "Aborted()\n" in r.stderr
+
+
+EXIT = """
+import ctypes as c, os
+libc = c.CDLL(None)
+handler = c.CFUNCTYPE(None)(lambda: os.write(1, b"ATEXIT-HANDLER-RAN\\n"))
+print("atexit", libc.atexit(handler), flush=True)
+libc.printf(b"unflushed-stdio")
+libc.exit.restype = None
+libc.exit(3)
+"""
+
+
+def test_c_exit_ends_the_process_without_atexit_handlers_or_a_flush(guest: Guest) -> None:
+    """Pyodide's `exit` import runs no C atexit handler (the runtime stays alive) and flushes no stdio."""
+    r = guest.run(EXIT)
+    assert r.returncode == 3
+    assert r.stdout == "atexit 0\n"
+
+
+def test_system_is_enosys(guest: Guest) -> None:
+    """No processes: system(NULL) says there is no shell; a command is ENOSYS (Node would run a shell)."""
+    code = """
+import ctypes as c
+libc = c.CDLL(None, use_errno=True)
+libc.system.argtypes = [c.c_char_p]
+print(libc.system(None), libc.system(b"true"), c.get_errno())
+import os
+print(os.system("true"))
+"""
+    r = guest.run(code)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["0 -1 52", "-1"]
+
+
+def test_progname_is_cut_and_ended(guest: Guest) -> None:
+    code = """
+import ctypes as c
+libc = c.CDLL(None)
+for n in (4, 1, 0, 20):
+    buf = c.create_string_buffer(b"x" * 20)
+    libc._emscripten_get_progname(buf, n)
+    print(n, buf.raw[:16])
+"""
+    r = guest.run(code)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == [
+        "4 b'./t\\x00xxxxxxxxxxxx'",
+        "1 b'\\x00xxxxxxxxxxxxxxx'",
+        "0 b'xxxxxxxxxxxxxxxx'",
+        "20 b'./this.program\\x00x'",
+    ]
+
+
+def test_heap_max_and_resize_follow_getheapmax(guest: Guest) -> None:
+    """getHeapMax() is 4294901760; a request above it fails, one below it that the memory can grow to succeeds."""
+    code = """
+import ctypes as c
+libc = c.CDLL(None)
+libc.emscripten_get_heap_max.restype = c.c_uint32
+libc.emscripten_resize_heap.argtypes = [c.c_uint32]
+print(libc.emscripten_get_heap_max(), *[libc.emscripten_resize_heap(n) for n in (0xFFFF0000, 0xFFFF0001, 0xFFFFFFFF)])
+"""
+    r = guest.run(code)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["4294901760 1 0 0"]
+
+
+def test_date_now_is_whole_milliseconds(guest: Guest) -> None:
+    code = """
+import ctypes as c
+libc = c.CDLL(None)
+libc.emscripten_date_now.restype = c.c_double
+a = libc.emscripten_date_now(); b = libc.emscripten_date_now()
+import time
+print(a == int(a), abs(a / 1000 - time.time()) < 5, b >= a)
+"""
+    r = guest.run(code)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["True True True"]
+
+
+def test_the_adapters_functions_are_found_by_dlsym(guest: Guest) -> None:
+    """dlsym(RTLD_DEFAULT, ...) finds what the glue answers, in the dynamic packaging as in the fused one."""
+    code = """
+import ctypes as c
+libc = c.CDLL(None)
+print([hasattr(libc, n) for n in ("exit", "__assert_fail", "emscripten_get_heap_max", "_PyEM_TrampolineCall_JS")])
+"""
+    r = guest.run(code)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["[True, True, True, True]"]
+
+
+def test_an_assert_with_a_pointer_beyond_the_memory_prints_what_it_can(guest: Guest) -> None:
+    """R10: the glue's UTF8ToString reads past the end of the heap as an empty string; it never traps while printing."""
+    r = guest.run(
+        ASSERT.replace('b"x == 1", b"file.c", 42, b"func"', 'c.c_void_p(0x7FFFFFFF), b"f", 1, c.c_void_p(0xFFFFFFF0)')
+    )
+    assert r.returncode == 134
+    assert "Aborted(Assertion failed: , at: f,1,)\n" in r.stderr
+
+
+def test_the_run_leaves_no_file_in_the_guests_root(flavor: str, capfd) -> None:
+    """N38: `run()` hands the code over and gets the status through the C API, not through `_pw_N.py`/`.rc`."""
+    from pyodide_nojs import Pyodide
+
+    with Pyodide(flavor) as py:
+        assert py.run("pass") == 0
+        assert py.run("raise ValueError(1)") == 1
+        assert py.run("import sys; sys.exit(2)") == 2
+        assert py.run("import os; print(sorted(os.listdir('/')))") == 0
+        assert py.run("open('/_pw_1.py')") == 1
+        assert py.run("a = 1\nb = 2\nraise KeyError(3)\n", argv=["x"]) == 1
+        out, err = capfd.readouterr()
+        assert "_pw_" not in out
+        assert "FileNotFoundError" in err
+        assert 'File "<string>", line 3, in <module>' in err  # argv does not shift the program's lines
+
+
+def test_argv_does_not_move_the_programs_lines(flavor: str, capfd: pytest.CaptureFixture[str]):
+    """sys.argv is set by a call of its own, not by a line put in front of the code: a traceback's line numbers are the
+    program's, a `from __future__` import stays the first statement, an empty argument stays."""
+    from pyodide_nojs import Pyodide
+
+    code = "from __future__ import annotations\nimport sys\nprint(sys.argv)\nraise ValueError('l4')\n"
+    with Pyodide(flavor) as py:
+        assert py.run(code, argv=["prog", "", "b"]) == 1
+        assert py.run("import sys; print(sys.argv)", argv=[]) == 0
+    captured = capfd.readouterr()
+    assert "['prog', '', 'b']" in captured.out and "[]" in captured.out
+    assert 'File "<string>", line 4, in <module>' in captured.err and "ValueError: l4" in captured.err

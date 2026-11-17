@@ -1,0 +1,147 @@
+"""Offline, no site folders: the interpreter itself, on both builds."""
+
+from __future__ import annotations
+
+import sys
+
+from conftest import Guest
+
+import pyodide_nojs as pw
+
+
+def test_versions():
+    assert pw.PYODIDE_VERSION == "315.0.0-alpha.2"
+    assert pw.PYODIDE_ABI == "pyemscripten_2026_5_wasm32"
+    assert pw.PYVER == "3.15"
+
+
+def test_hello(guest: Guest):
+    p = guest.run("import sys; print(sys.platform, sys.version_info[:2], sum(range(10)))")
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split() == ["emscripten", "(3,", "15)", "45"]
+
+
+def test_stdlib_from_the_zip(guest: Guest):
+    p = guest.run(
+        "import json, collections, platform, hashlib, zlib, decimal, fractions, zipfile\n"
+        "print(hashlib.sha256(b'a').hexdigest()[:8], zlib.crc32(b'a'), decimal.Decimal(1) / 3, json.dumps([1, 2]))"
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split()[:2] == ["ca978112", "3904355907"]
+
+
+def test_big_list_grows_the_memory(guest: Guest):
+    p = guest.run("x = [i * i for i in range(2_000_000)]; print(len(x), x[-1])")
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split() == ["2000000", "3999996000001"]
+
+
+def test_a_raised_error_is_exit_1_with_a_traceback(guest: Guest):
+    p = guest.run("1 / 0")
+    assert p.returncode == 1
+    assert "ZeroDivisionError" in p.stderr
+
+
+def test_a_caught_error(guest: Guest):
+    p = guest.run("try:\n    1 / 0\nexcept ZeroDivisionError as e:\n    print('caught', e)")
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "caught division by zero"
+
+
+def test_files_in_the_guest(guest: Guest):
+    p = guest.run(
+        "import os, tempfile\n"
+        "os.makedirs('/work', exist_ok=True)\n"
+        "open('/work/a.txt', 'w').write('hi')\n"
+        "print(open('/work/a.txt').read(), sorted(os.listdir('/work')), os.path.exists('/nope'))"
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split() == ["hi", "['a.txt']", "False"]
+
+
+def test_a_mounted_host_folder(guest: Guest, tmp_path):
+    (tmp_path / "in.txt").write_text("from the host")
+    p = guest.run(
+        "print(open('/mnt/in.txt').read()); open('/mnt/out.txt', 'w').write('from the guest')",
+        None,
+        "--mount",
+        f"/mnt={tmp_path}",
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "from the host"
+    assert (tmp_path / "out.txt").read_text() == "from the guest"
+
+
+def test_argv_and_a_script(guest: Guest, tmp_path):
+    script = tmp_path / "s.py"
+    script.write_text("import sys; print(sys.argv)")
+    p = guest.run("pass", None, str(script), "a", "b")
+    # `-c` wins over the script: the file is its argument
+    assert p.returncode == 0, p.stderr
+
+
+def test_two_interpreters_in_one_process(flavor: str):
+    with pw.Pyodide(flavor) as a, pw.Pyodide(flavor) as b:
+        assert a.run("x = 1") == 0
+        assert b.run("assert 'x' not in dir()") == 0
+        assert a.run("assert x == 1") == 0
+        assert a.run("raise SystemExit(3)") != 0
+
+
+def test_ctypes_calls_with_floats_and_64_bit_values(guest: Guest):
+    """ffi_call_js: mixed signatures (double, float, int64) through the generated call_indirect dispatch."""
+    p = guest.run(
+        "import ctypes\n"
+        "c = ctypes.CDLL(None)\n"
+        "def f(n, r, *a):\n    g = getattr(c, n); g.restype = r; g.argtypes = list(a); return g\n"
+        "d, fl, ll = ctypes.c_double, ctypes.c_float, ctypes.c_longlong\n"
+        "print(f('pow', d, d, d)(2.0, 10.0), f('fabsf', fl, fl)(-1.5), f('ldexp', d, d, ctypes.c_int)(3.0, 4),\n"
+        "      f('llabs', ll, ll)(-2**40), f('atof', d, ctypes.c_char_p)(b'2.5'),\n"
+        "      f('fma', d, d, d, d)(2.0, 3.0, 4.0),\n"
+        # a double argument and an int result:
+        "      f('lround', ctypes.c_long, d)(2.6), f('ilogb', ctypes.c_int, d)(8.0))"
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split() == ["1024.0", "1.5", "48.0", "1099511627776", "2.5", "10.0", "3", "3"]
+
+
+def test_dup_scandir_fwalk_and_rmtree(guest: Guest):
+    p = guest.run(
+        "import os, shutil\n"
+        "os.makedirs('/d/sub/deep')\nopen('/d/sub/f.txt', 'w').write('hello')\n"
+        "fd = os.open('/d/sub/f.txt', os.O_RDONLY); os.lseek(fd, 2, 0); d = os.dup(fd)\n"
+        "sd = os.open('/d/sub', os.O_RDONLY)\n"
+        "print(os.read(d, 10), sorted(e.name for e in os.scandir(sd)),\n"
+        "      len(list(os.fwalk('/d'))))\n"
+        "os.close(fd); os.close(d); os.close(sd)  # Windows can not delete what is open\n"
+        "shutil.rmtree('/d'); print(os.path.exists('/d'))"
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.split("\n")[:2] == ["b'llo' ['deep', 'f.txt'] 3", "False"]
+
+
+def test_chdir_symlink_and_honest_enosys(guest: Guest):
+    # wasmtime's path_symlink on Windows takes the target relative to the root, not to the link's directory (CI run
+    # 42829422107: ENOENT for 'f' -> 'ln' in /a/b), so the link is not made there (see NO_WIN_SYMLINK in test_files.py)
+    win = sys.platform == "win32"
+    p = guest.run(
+        "import os, errno\n"
+        "os.makedirs('/a/b'); os.chdir('/a'); os.chdir('b'); print(os.getcwd())\n"
+        "open('f', 'w').write('x')\n"
+        + ("" if win else "os.symlink('f', 'ln'); print(os.readlink('ln'), os.path.exists('/a/b/ln'))\n")
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.splitlines() == ["/a/b", *([] if win else ["f True"])]
+
+
+def test_exit_codes(guest: Guest):
+    assert guest.run("import sys; sys.exit(3)").returncode == 3
+    assert guest.run("import os; os._exit(7)").returncode == 7
+    assert guest.run("1 / 0").returncode == 1
+    assert guest.run("import os; os.abort()").returncode == 134  # the guest trapped
+
+
+def test_stdin_is_eof_when_the_parent_closes_it(guest: Guest):
+    p = guest.run("import sys; print(repr(sys.stdin.read()))")
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "''"

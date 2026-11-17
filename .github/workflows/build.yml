@@ -1,0 +1,130 @@
+name: Build wasm
+
+# Builds everything the package carries and the tests run against, once, for tests.yml and publish.yml:
+#   wasm-opt   Binaryen 132 as wasm32-wasip1 with wasi-sdk 34 (about 12 min; cached by the hash of its script, the wasi-sdk lines of fetch.sh and the npm Binaryen version)
+#   data       pyodide.asm.wasm (exnref), python_stdlib.zip, adapter.wasm (wasi-sdk's clang), pyodide_fused.wasm, wasm-opt.wasm,
+#              pyodide-lock.json
+#   ssl        the guest's real _ssl + ssl.py (OpenSSL 3.5.9, pyodide-build and Emscripten 6.0.5: tools/build_ssl.sh) -> data/tls; the static
+#              OpenSSL libraries are cached by the hash of the script (every pin is in it)
+#   testenv    numpy, cffi, the `test` package and a venv, installed by the pip of a real `pyodide venv` (uv's Python 3.15, pyodide-build, Node);
+#              openssl and python_tests.yaml (tools/prepare_testenv.sh)
+# Node is a build tool here (Binaryen's wasm-opt and wasm-merge from npm); the package needs none at run time.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wasm-opt:
+    name: wasm-opt.wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache key
+        id: key
+        # what changes wasm-opt.wasm: its build script, the wasi-sdk it is built with (the lines of fetch.sh that name it)
+        # and the npm Binaryen that optimises the result; a Pyodide bump or a rename of the project must not rebuild it
+        run: |
+          BV=$(python3 -c "import json; print(json.load(open('package.json'))['devDependencies']['binaryen'])")
+          H=$( (cat tools/build_binaryen.sh; grep -h 'wasi-sdk' tools/fetch.sh; echo "binaryen=$BV") | sha256sum | cut -d' ' -f1)
+          echo "hash=$H" >> "$GITHUB_OUTPUT"
+
+      - name: Restore wasm-opt.wasm
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: wasm-opt.wasm
+          key: wasm-opt-${{ steps.key.outputs.hash }}
+
+      - uses: actions/setup-node@v7
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          node-version: "22"
+
+      - name: Build wasm-opt.wasm (wasi-sdk 34, Binaryen version_132)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # cmake and ninja from PyPI wheels: the runner image's apt mirrors are not always reachable
+          python3 -m venv "$RUNNER_TEMP/buildtools" && "$RUNNER_TEMP/buildtools/bin/pip" install -q cmake ninja
+          PATH="$RUNNER_TEMP/buildtools/bin:$PATH" OUT="$PWD/wasm-opt.wasm" sh tools/build_binaryen.sh pyo-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wasm-opt
+          path: wasm-opt.wasm
+          retention-days: 14
+
+  ssl:
+    name: _ssl (OpenSSL 3.5.9)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+
+      # libssl.a and libcrypto.a (about 3 min): what changes them is in the script (pyodide-build, Emscripten, OpenSSL and the recipe pins)
+      - name: Restore the OpenSSL libraries
+        uses: actions/cache@v6
+        with:
+          path: ssl-work/rc/.libs
+          key: ssl-libs-${{ hashFiles('tools/build_ssl.sh') }}
+
+      - name: Build _ssl and ssl.py
+        run: sh tools/build_ssl.sh ssl-work "$PWD/tls"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tls
+          path: tls
+          retention-days: 14
+
+  data:
+    name: data + testenv
+    needs: [wasm-opt, ssl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          python-version: "3.13"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm-opt
+          path: wasm-opt
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tls
+          path: src/pyodide_nojs/data/tls
+
+      - name: Build the package's wasm
+        run: |
+          uv sync --locked
+          PATH="$PWD/.venv/bin:$PATH" WASM_OPT_WASM="$PWD/wasm-opt/wasm-opt.wasm" sh tools/build_data.sh pyo-build
+
+      - name: Build the test environment
+        run: PATH="$PWD/.venv/bin:$PATH" sh tools/prepare_testenv.sh pyo-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: data
+          path: src/pyodide_nojs/data
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: testenv
+          path: pyo-build/testenv
+          retention-days: 14

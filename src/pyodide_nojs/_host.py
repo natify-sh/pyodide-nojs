@@ -1,0 +1,1488 @@
+"""CPython of Pyodide (`pyodide.asm.wasm`) run by wasmtime-py with no JavaScript.
+
+The Emscripten `env` glue is wasm (`adapter.wasm`, C, after the shape of Wasmtime's preview1 adapter); this file is
+what a wasm module can not do itself: WASI (wasmtime's own), the loader's operations (the host holds the instances and
+their exports by name), the host's sockets (WASI preview1 has no `connect`), `fs` (`statvfs`, the terminal) and the
+fetch; the whole list is in docs/HOST_CONTRACT.md.
+
+Two builds of the same sources, one `Pyodide` class:
+
+* ``dynamic``: ``pyodide.asm.wasm`` + ``adapter.wasm``, linked at run time (a shim generated from the import list, the
+  trampoline, and a fixup of the shim's table);
+* ``fused``: ``pyodide_fused.wasm``, one core module made at build time (`tools/fuse.py`), only instantiated.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import functools
+import hashlib
+import json
+import logging
+import os
+import posixpath
+import shutil
+import struct
+import sys
+import tempfile
+import threading
+import time
+import traceback
+from pathlib import Path
+from typing import Any
+
+from . import PYODIDE_ABI, _cif, _engine, _timecalc, _tty, _venv, _wasm
+from ._consts import (
+    BASE_ENV,
+    FLAVORS,
+    GLOBAL_WHY,
+    GUEST,
+    GUEST_OWN_ENV,
+    GUEST_SUFFIXES,
+    JS_MODULES,
+    MAX_MEMORY,
+    MAX_TABLE,
+    PYVER,
+    SERVICE_EXPORTS,
+    SERVICES,
+    SNAPSHOT_VERSION,
+    TESTENV_HINT,
+    U32,
+    WASI_ERRNO,
+    GuestExit,
+    GuestFault,
+    MainExports,
+    available_flavors,
+    code_hash,
+    data_dir,
+    from_wasm,
+    guest_errno,
+    override_path,
+    override_warnings,
+    s32,
+    to_wasm,
+)
+from ._guest import Guest
+from ._net import Net
+from ._sockaddr import (
+    ca_bundle,
+    werr,
+)
+
+log = logging.getLogger("pyodide_nojs")
+
+# what the package, its tools and its tests import from here
+__all__ = [
+    "BASE_ENV",
+    "FLAVORS",
+    "PYVER",
+    "TESTENV_HINT",
+    "GuestExit",
+    "GuestFault",
+    "Pyodide",
+    "available_flavors",
+    "data_dir",
+    "guest_errno",
+    "override_warnings",
+]
+
+
+class Pyodide:
+    """One Python (Pyodide's CPython) in wasm, run by wasmtime.
+
+    >>> py = Pyodide()                       # the dynamic build from the package's data (fused if only that is there)
+    >>> py.run("print(1 + 1)")               # 0 if the code ran, 1 if it raised (the traceback is on stderr)
+
+    ``site``: a folder (or several) copied into the guest's ``site-packages`` (a wheel unpacked...; it wins over the
+    package's own ``micropip``);
+    ``venv``: the root of a virtual environment made by ``pyodide venv``: its site-packages is used like one more
+    ``site`` folder (the explicit ones win); another Python is a ``ValueError``, wheels of another Pyodide a warning;
+    The guest's ``ssl`` is always the real one: ``_ssl`` (OpenSSL 3.5.9) and CPython's own ``ssl.py`` from the
+    package's ``data/tls`` (``tools/build_ssl.sh``), copied into ``site-packages`` ahead of the stdlib zip's stub;
+    ``micropip`` and ``packaging`` are the package's too (``data/py``).
+    ``mounts``: ``{guest path: host folder}`` preopened as they are (the guest can write there);
+    ``env``: more environment variables.
+    The guest is isolated: its environment is Pyodide's minimal one (``BASE_ENV``) plus ``env``, never the host's,
+    unless ``inherit_env`` passes the host's variables too, secrets included (``env`` wins; no snapshot then).
+    The guest's ``/`` is a temporary folder (stdlib zip, site-packages). The network is OFF by default and the flags
+    (wasmtime's ``-S`` model) switch the host's world on: ``tcp`` / ``udp`` (sockets of that type; ``socketpair()``
+    is a TCP pair over the host's loopback, so it needs ``tcp``; asyncio's default loop needs nothing), ``dns``
+    (name lookup; numeric addresses always resolve), ``http`` (the host's fetch, used by ``hostnet``),
+    ``inherit_network`` (all of them). ``pyfetch`` only installs the handler that puts the host's fetch in the
+    place of the guest's own sockets and TLS: ``pyodide.http.pyfetch``, ``urllib`` and ``urllib3`` (so ``requests``
+    and ``micropip``) send through the host (``hostnet.install()``, as in a preload). It grants nothing: the fetch
+    itself needs ``http`` (or ``inherit_network``), else it is an ``OSError`` that names ``--http``. Without
+    ``pyfetch`` they use the guest's sockets and ``_ssl`` (which need ``tcp`` and ``dns``).
+    A denied socket is ``PermissionError`` (EACCES), a denied lookup ``gaierror`` EAI_FAIL, a denied fetch an
+    ``OSError`` that names the flag.
+
+    ``preload``: Python source run once at start (as ``run(preload)``). The memory after it is cached in a snapshot file
+    in the cache dir, so a next start with the same preload and settings restores it instead of booting Python
+    (``$PYODIDE_NOJS_SNAPSHOT=0`` turns that off). The preload must only import and compute: it must not print (it
+    prints at snapshot time only); opening files or sockets, ``chdir``, writing files, ``dlopen``, ``ctypes`` symbol
+    lookups or callbacks, and signals or timers make the snapshot be skipped (a normal start,
+    the preload run once); with ``site=``, ``venv=`` (one more site folder), ``mounts=`` (also the CLI's
+    ``--mount-cwd``) or ``inherit_env`` there is no snapshot at all.
+    """
+
+    def __init__(
+        self,
+        flavor: str | None = None,
+        *,
+        site: str | os.PathLike[str] | list[str | os.PathLike[str]] | None = None,
+        venv: str | os.PathLike[str] | None = None,
+        mounts: dict[str, str | os.PathLike[str]] | None = None,
+        env: dict[str, str] | None = None,
+        inherit_env: bool = False,
+        data: str | os.PathLike[str] | None = None,
+        wasm_opt: str | os.PathLike[str] | None = None,
+        preload: str | None = None,
+        asm_wasm: str | os.PathLike[str] | None = None,
+        stdlib: str | os.PathLike[str] | None = None,
+        inherit_network: bool = False,
+        tcp: bool = False,
+        udp: bool = False,
+        dns: bool = False,
+        http: bool = False,
+        pyfetch: bool = False,
+    ) -> None:
+        wt = _engine.require_wasmtime()
+        self._wt = wt
+        self.data = data_dir(data)
+        self.asm_wasm = override_path(asm_wasm, "PYODIDE_NOJS_ASM_WASM")
+        self.stdlib = override_path(stdlib, "PYODIDE_NOJS_STDLIB")
+        self._override_checked = False
+        have = available_flavors(self.data)
+        overridden = self.asm_wasm is not None or self.stdlib is not None
+        if self.asm_wasm is not None and "dynamic" not in have and (self.data / "adapter.wasm").exists():
+            have.append("dynamic")  # the adapter is the package's, the main module is the given one
+        if flavor is None:  # an override implies dynamic, whatever $PYODIDE_NOJS_FLAVOR says (as the README states)
+            flavor = (
+                "dynamic"
+                if overridden
+                else _engine.env("PYODIDE_NOJS_FLAVOR")
+                or ("dynamic" if "dynamic" in have else (have[0] if have else "dynamic"))
+            )
+        if flavor == "fused" and overridden:
+            raise ValueError(
+                "asm_wasm/stdlib replace files of the dynamic build: "
+                "the fused module is built for one Pyodide (use dynamic)"
+            )
+        if flavor not in FLAVORS:
+            raise ValueError(f"flavor must be one of {FLAVORS}, not {flavor!r}")
+        if flavor not in have:
+            raise FileNotFoundError(
+                f"no {flavor} build in {self.data} (found: {have or 'nothing'}); see tools/build_data.sh"
+            )
+        self.flavor = flavor
+        self.site = [site] if isinstance(site, (str, os.PathLike)) else list(site or [])
+        if venv is not None:  # one more site folder, ahead of the explicit ones (those win)
+            if not os.path.isdir(venv):
+                raise FileNotFoundError(f"venv folder not found: {venv}")
+            _venv.check_python(Path(venv), PYVER)
+            vsite = _venv.site_packages(Path(venv))
+            self.site.insert(0, vsite)
+            if bad := _venv.foreign_wheels(vsite, PYVER, PYODIDE_ABI):
+                names = ", ".join(bad[:5]) + (f" and {len(bad) - 5} more" if len(bad) > 5 else "")
+                print(
+                    f"pyodide-nojs: {venv} holds packages built for another Python or Pyodide, which will not "
+                    f"load here (Python {PYVER}, {PYODIDE_ABI}): {names}; pure-Python packages work",
+                    file=sys.stderr,
+                )
+        self.own_dirs = self._own_folders()
+        self.mounts = {k: str(v) for k, v in (mounts or {}).items()}
+        for guest in self.mounts:
+            at = posixpath.normpath("/" + guest.lstrip("/"))
+            if at in ("/dev", "/proc") or at.startswith(("/dev/", "/proc/")):
+                raise ValueError(
+                    f"mount {guest!r}: /dev and /proc are the adapter's own (virtual) and can not be mounted over"
+                )
+        for what, folders in (("site", self.site), ("mount", self.mounts.values())):
+            for f in folders:
+                if not os.path.isdir(f):
+                    raise FileNotFoundError(f"{what} folder not found: {f}{TESTENV_HINT}")
+        self.env = dict(env or {})
+        self.inherit_env = inherit_env
+        self.preload = preload if not pyfetch else (preload or "") + "import hostnet\nhostnet.install()\n"
+        self.restored = False  # the guest came from a snapshot
+        self._net_slots: tuple[int, int] = (0, 0)
+        opt = os.environ.get("WASM_OPT") or wasm_opt or self.data / "wasm-opt.wasm"
+        self.wasm_opt = str(opt) if (os.environ.get("WASM_OPT") or wasm_opt or Path(opt).exists()) else None
+        # state of the running guest
+        self.root: Path | None = None
+        self.instances: list = [None]  # id -> {exports (name -> extern, in export order), got (GOT globals)}
+        self.slots: dict = {}  # (instance, export name) -> table slot
+        self.scopes: dict[int, list[int]] = {}  # a dlopen call's scope -> the instances loaded in it
+        self._tfuncs: dict[bytes, int] = {}  # the table's functions (by engine handle) -> first slot
+        self._tscanned = 0
+        self._gseq = 0  # libraries made RTLD_GLOBAL so far
+        self._wasi_linker: Any = None  # wasmtime's WASI functions, for the side modules that import them
+        self._dlreason = ""  # why the last instantiate failed
+        self.guest = Guest()  # the store, the main module's exports, memory, table and the call contexts
+        self.net = Net(
+            self.guest,
+            tcp=tcp or inherit_network,
+            udp=udp or inherit_network,
+            dns=dns or inherit_network,
+            http=http or inherit_network,
+        )  # the host's sockets and fetch: it owns them
+        self.lazy: list[str] = []
+        self.converted = 0  # modules whose legacy exceptions the loader converted at dlopen
+        self.summary = ""
+        self._started = False
+        # where interrupt() writes: (the memory's base address or None, the cell, the flag byte), set when the start is
+        # over and forgotten by close(), both under the lock
+        self._sig: tuple[int | None, int, int] | None = None
+        self._sig_lock = threading.RLock()
+        self._sig_posted = False  # interrupt() ran since this run began
+        self._sig_since_run = False  # interrupt() ran since the last run ended (what it left in a run's wrapper)
+        self._exited: int | None = None
+        # table slots of freed closures (ffi_closure_free_js), reused last in, first out
+        self.free_slots: list[int] = []
+        # table index -> (Func, parameter types, result types) of the functions called by ffi_call_js and the trampoline
+        self.functions: dict[int, tuple] = {}
+        self.func_pool: dict[tuple, list] = {}  # signature -> (Func, state) of freed closures, ready for the next one
+        # set when the guest holds what only the host's side keeps (a closure's table slot, a signal word or timer): a
+        # snapshot of the memory would not hold it, so none is taken. (The time zone libc read at init is in the
+        # snapshot's key instead: every interpreter reads it.)
+        self.host_state = False
+        # the host terminal's attributes as they were before the guest changed them (descriptor -> termios list), put
+        # back at the end of every run() and by close(): _tty.py
+        self._tty_saved: dict[int, list] = {}
+        self.closures_out = 0  # closures the guest holds (allocated, not yet freed): their slots are the host's
+        self.live_funcs: dict[int, tuple] = {}  # table slot -> (signature, Func, state) of a closure in use
+        self._svc_ex: Any = (
+            None  # where the host's own exports of the adapter are: the main module (fused), the adapter
+        )
+
+    # ------------------------------------------------------------------ the guest's root
+    def _own_folders(self) -> list[Path]:
+        """The package's own folders for the guest's site-packages: the real `_ssl` and `ssl.py` (`data/tls`,
+        `tools/build_ssl.sh`) and `micropip` with `packaging` (`data/py`, `tools/bundle_py.py`). `_setup_root` copies
+        them ahead of the `site=` folders, `_at_start` puts site-packages ahead of the stdlib zip's stub, `_own_key`
+        keys the snapshot."""
+        found = []
+        for name, build in (("tls", "tools/build_ssl.sh"), ("py", "tools/build_data.sh")):
+            d = self.data / name
+            if not d.is_dir():
+                raise FileNotFoundError(
+                    f"the guest's {name} files are missing: no {d}; build them with `sh {build} pyo-build`"
+                )
+            found.append(d)
+        return found
+
+    def _own_key(self) -> list[list[str]]:
+        """The files' own stamps (size and mtime, as the other data files)."""
+        files = sorted(f for d in self.own_dirs for f in d.rglob("*") if f.is_file())
+        return [[str(f.relative_to(self.data)), _engine.file_stamp(f).decode()] for f in files]
+
+    def _setup_root(self) -> None:
+        self.root = root = Path(tempfile.mkdtemp(prefix="pyodide_nojs_"))
+        (root / "lib" / f"python{PYVER}" / "lib-dynload").mkdir(parents=True)  # CPython looks for it at start
+        shutil.copy(
+            self.stdlib or self.data / "python_stdlib.zip", root / "lib" / f"python{PYVER.replace('.', '')}.zip"
+        )
+        sp = root / "lib" / f"python{PYVER}" / "site-packages"
+        sp.mkdir()
+        guest_files = sorted(g for g in GUEST.iterdir() if g.suffix in GUEST_SUFFIXES)
+        for g in guest_files:  # before the site= folders: a file of the same name there wins (but not the run protocol)
+            if g.name != "pyodide_nojs_run.py":
+                shutil.copy(g, sp)
+        lock = self.data / "pyodide-lock.json"  # Pyodide's package lock, for micropip (guest/pyodide_lock.py)
+        if lock.exists():
+            shutil.copy(lock, sp / "pyodide-lock.json")
+        for s in [
+            *self.own_dirs,
+            *self.site,
+        ]:  # inside the preopen: WASI does not follow a link out of it
+            shutil.copytree(s, sp, dirs_exist_ok=True)
+        shutil.copy(GUEST / "pyodide_nojs_run.py", sp)  # the host's own protocol: ours always wins
+        for guest in self.mounts:  # a placeholder, so that a directory listing of the parent shows the mount
+            (root / guest.lstrip("/")).mkdir(parents=True, exist_ok=True)
+        (root / "home" / "pyodide").mkdir(parents=True, exist_ok=True)  # HOME
+        (root / "tmp").mkdir(exist_ok=True)  # Pyodide has /tmp (mode 0o777, set at start by _boot): tempfile's default
+        (root / "etc" / "ssl").mkdir(parents=True)
+        (root / "etc" / "ssl" / "cert.pem").write_bytes(ca_bundle())
+        (root / "etc" / "services").write_text("".join(f"{n} {p}/{pr}\n" for (n, pr), p in SERVICES.items()))
+
+    def _drop_stubs(self) -> None:
+        """The fused module exports the zero/null stubs of the JavaScript bridge (the merge made them functions);
+        the glue marks them `stub` and dlsym and the GOT do not see them: nor do we. Needs the pyodide.asm.wasm
+        and adapter.wasm of the package (without them every export stays)."""
+        main_path, adapter_path = self.data / "pyodide.asm.wasm", self.data / "adapter.wasm"
+        if not (main_path.exists() and adapter_path.exists()):
+            return
+        # the names are read from 10 MB of wasm: kept in the cache dir, keyed by the two files' size and mtime
+        key = hashlib.sha256(b"|".join(_engine.file_stamp(p) for p in (main_path, adapter_path))).hexdigest()[:16]
+        cached = _engine.cache_dir() / f"stubs-{key}.json"
+        try:
+            names = json.loads(cached.read_text())
+        except (OSError, ValueError):
+            wasm = main_path.read_bytes()
+            answered = set(_wasm.export_names(adapter_path.read_bytes())) | set(_wasm.export_names(wasm))
+            answered.add(_wasm.TRAMP)
+            names = [n for mod, n, kind in _wasm.import_names(wasm) if mod == "env" and kind == 0 and n not in answered]
+            try:
+                _engine.private_dir(cached.parent)
+                cached.write_text(json.dumps(names))
+            except OSError:
+                pass
+        self.instances[0]["exports"].hidden.update(names)
+
+    # ------------------------------------------------------------------ the loader's host interface
+    # Five operations a wasm module cannot do itself, because the host holds the instances and their exports by
+    # name: instantiate, scope, got_set, sym, call. The rest of `_dlopen_js` (the file, dylink.0 and its bounds, memory
+    # from calloc, the GOT, relocations, constructors, dlerror) runs in the adapter.
+    #
+    # What a module's `env` imports see, as in Emscripten's glue: the main module (in the dynamic build with the
+    # adapter's exports), then the libraries loaded RTLD_GLOBAL, and, when the function is first called (the glue's
+    # lazy stubs), the libraries of the dlopen call's own scope (its NEEDED libraries; the last one wins) and last
+    # the module's own exports.
+    def _rd(self, a: int, n: int) -> bytes:
+        return self.guest.rd(a, n)
+
+    def _wr(self, a: int, data: bytes) -> None:
+        self.guest.wr(a, data)
+
+    def _env_func(self, name: str, scope: int = 0, own: dict | None = None) -> Any:
+        wt = self._wt
+        # the main module, then the libraries in the order they became RTLD_GLOBAL (the glue's mergeLibSymbols)
+        glob = sorted(
+            (self.instances[i]["global"], i) for i in range(1, len(self.instances)) if self.instances[i]["global"]
+        )
+        ids = [0] + [i for _, i in glob]
+        if scope:
+            ids += reversed(self.scopes.get(scope, []))
+        for i in ids:
+            e = self.instances[i]["exports"].get(name)
+            if isinstance(e, wt.Func):
+                return e
+        e = (own or {}).get(name)
+        return e if isinstance(e, wt.Func) else None
+
+    def _dl_fail(self, kind: str, exc: BaseException) -> int:
+        """A failed load: the reason as the glue's `${e}` prints it (the adapter asks for it with loader.error 11)."""
+        why = [ln.strip() for ln in str(exc).splitlines() if ln.strip()]
+        self._dlreason = f"{kind}: {why[-1] if why else type(exc).__name__}"
+        log.info("[loader] instantiate failed: %s: %s", type(exc).__name__, exc)
+        return -1
+
+    def _dl_reason(self, text: str) -> int:
+        """A failed load whose reason is the JS API's own text (a link error the engine would word differently)."""
+        self._dlreason = text
+        log.info("[loader] instantiate failed: %s", text)
+        return -1
+
+    def _link_error(self, i: int, imp: Any, item: Any, number: bool) -> str | None:
+        """What V8 says when the glue's import object gives `item` for import `imp` (#i) and it does not fit, else
+        None. `number`: the glue gives a plain number (__memory_base, __table_base); item None: a JS function."""
+        wt, c = self._wt, self.guest.cur[-1]
+        ty = imp.type
+        pre = f'LinkError: WebAssembly.Instance(): Import #{i} module="{imp.module}" function="{imp.name}": '
+        if isinstance(ty, wt.FuncType):
+            if not isinstance(item, wt.Func):
+                return pre + "function import requires a callable"
+            if imp.module == "env":  # the glue's own functions are JavaScript, which takes any signature: not checked
+                have = item.type(c)
+                if [str(t) for t in have.params] != [str(t) for t in ty.params] or [str(t) for t in have.results] != [
+                    str(t) for t in ty.results
+                ]:
+                    return pre + "imported function does not match the expected type"
+        elif isinstance(ty, wt.GlobalType):
+            if number:
+                if ty.mutable:
+                    return pre + "imported mutable global must be a WebAssembly.Global object"
+                if str(ty.content) not in ("i32", "f32", "f64"):
+                    return pre + GLOBAL_WHY
+            elif not isinstance(item, wt.Global):
+                return pre + GLOBAL_WHY
+            else:
+                have = item.type(c)
+                if have.mutable != ty.mutable:
+                    return pre + "imported global does not match the expected mutability"
+                if str(have.content) != str(ty.content):
+                    return pre + "imported global does not match the expected type"
+        elif isinstance(ty, wt.MemoryType):
+            if not isinstance(item, wt.Memory):
+                return pre + "memory import must be a WebAssembly.Memory object"
+            lim, mt, pages = ty.limits, item.type(c), item.size(c)
+            if pages < lim.min:
+                return pre + f"memory import has {pages} pages which is smaller than the declared initial of {lim.min}"
+            if lim.max is not None:
+                have_max = mt.limits.max
+                if have_max is None:
+                    return pre + f"memory import has no maximum limit, expected at most {lim.max}"
+                if have_max > lim.max:
+                    why = f"memory import has a larger maximum size {have_max} than the module's declared maximum"
+                    return pre + f"{why} {lim.max}"
+            if ty.is_shared != mt.is_shared:
+                declared, imported = int(ty.is_shared), int(mt.is_shared)
+                return pre + f"mismatch in shared state of memory, declared = {declared}, imported = {imported}"
+        elif isinstance(ty, wt.TableType):
+            if not isinstance(item, wt.Table):
+                return pre + "table import requires a WebAssembly.Table"
+            if str(item.type(c).element) != str(ty.element):
+                return pre + "imported table does not match the expected type"
+            size, lim = item.size(c), ty.limits
+            if size < lim.min:
+                return (
+                    f"LinkError: WebAssembly.Instance(): table import {i} is smaller than initial {lim.min}, got {size}"
+                )
+            if lim.max is not None and item.type(c).limits.max is None:
+                return f"LinkError: WebAssembly.Instance(): table import {i} has no maximum length, expected {lim.max}"
+        elif isinstance(ty, wt.TagType):
+            if not isinstance(item, wt.Tag):
+                return pre + "tag import requires a WebAssembly.Tag"
+            ft = ty.functype  # the glue's tags carry one i32
+            if [str(t) for t in ft.params] != ["i32"] or list(ft.results):
+                return pre + "imported tag does not match the expected type"
+        return None
+
+    # the reasons of loader.error, as Emscripten's glue words them (`${e}` of the error it throws)
+    _DL_WHY = {
+        1: 'Error: Failed to find dynamic library "{arg}"',
+        2: "Error: need to see wasm magic number",
+        3: "Error: need the dylink section to be first",
+        4: "Error",
+        5: "RangeError: byte length of Uint32Array should be a multiple of 4",
+        6: "CompileError: WebAssembly.Module(): module is truncated or malformed",
+        7: "Error: Dynamic linking error: undefined symbol '{arg}'",
+        8: "[object Object]",
+        9: "RangeError: WebAssembly.Memory(): out of memory",
+        10: "RangeError: Maximum call stack size exceeded",
+    }
+
+    def _dl_error(self, code: int, np_: int, nn: int, ap: int, an: int) -> None:
+        """dlerror's text: the glue's own, set through the main module's __dl_seterr."""
+        name = self._rd(np_, nn).decode("utf-8", "replace") if np_ else "__main__"
+        arg = self._rd(ap, an).decode("utf-8", "replace") if ap and an else ""
+        if code == 12:
+            text = f'Tried to lookup unknown symbol "{arg}" in dynamic lib: {name}'
+        else:
+            why = self._dlreason if code & 255 == 11 else self._DL_WHY.get(code & 255, "Error").format(arg=arg)
+            text = ("'Could not" if code & 256 else "could not") + f" load dynamic lib: {name}\n{why}"
+        c = self.guest.cur[-1]
+        ex = self.instances[0]["exports"]
+        msg = text.encode("utf-8", "replace")
+        blk = ex["malloc"](c, 8 + len(msg) + 1) & 0xFFFFFFFF  # [the %s argument][the format "%s"][the text]
+        if not blk:  # no memory even for the message: dlerror stays what it was
+            return
+        self._wr(blk, struct.pack("<I", blk + 8) + b"%s\0\0" + msg + b"\0")
+        ex["__dl_seterr"](c, s32(blk + 4), s32(blk))  # the format and the pointer to its arguments
+        ex["free"](c, s32(blk))
+
+    def _dl_instantiate(self, p: int, n: int, mb: int, tb: int, scope: int) -> int:
+        wt = self._wt
+        c = self.guest.cur[-1]
+        data = self._rd(p, n)
+        if data[:4] != b"\0asm":  # wasmtime.Module would also take WAT text
+            return self._dl_fail("Error", ValueError("need to see wasm magic number"))
+        try:
+            try:
+                module = wt.Module(_engine.engine(), data)
+            except Exception as exc:  # legacy exceptions (a wheel micropip just installed): Binaryen's wasm-opt, here
+                if "legacy_exceptions" not in str(exc) or not self.wasm_opt:
+                    raise
+                data = _engine.translate_to_exnref(data, self.wasm_opt)
+                module = wt.Module(_engine.engine(), data)
+                self.converted += 1
+                log.info("[loader] converted legacy exceptions to exnref (%d bytes)", n)
+            wasi = [
+                i.name
+                for i in module.imports
+                if i.module == "wasi_snapshot_preview1" and i.name not in _wasm.WASI_ROUTED
+            ]
+            if wasi and "memory" not in {e.name for e in module.exports}:
+                # WASI reads the memory of its caller from the caller's `memory` export, which a side module lacks
+                module = wt.Module(_engine.engine(), _wasm.with_memory_export(data))
+        except Exception as exc:
+            return self._dl_fail("CompileError: WebAssembly.Module()", exc)
+        try:
+            linker = wt.Linker(_engine.engine())
+            own: dict = {}
+            got: list = []
+            i32 = wt.ValType.i32()
+            main = self.instances[0]["exports"]
+            imports = list(module.imports)
+            for i, imp in enumerate(imports):  # V8 looks at every module object before it checks any import
+                if imp.module not in JS_MODULES:
+                    return self._dl_reason(
+                        f'TypeError: WebAssembly.Instance(): Import #{i} module="{imp.module}": '
+                        "module is not an object or function"
+                    )
+            for i, imp in enumerate(imports):
+                m, nm, ty = imp.module, imp.name, imp.type
+                number = m == "env" and nm in ("__memory_base", "__table_base")  # a number in the glue
+                if isinstance(ty, wt.TableType) and ty.limits.min > 10_000_000:
+                    return self._dl_reason(
+                        f"RangeError: WebAssembly.Instance(): initial table size ({ty.limits.min} elements) is "
+                        "larger than implementation limit (10000000 elements)"
+                    )
+                item: Any = None  # None: what the glue's import object gives is a JavaScript function
+                if m == "env" and nm == "memory":
+                    item = self.guest.memory
+                elif m == "env" and nm == "__indirect_function_table":
+                    item = self.guest.table
+                elif number:
+                    item = wt.Global(c, wt.GlobalType(i32, False), wt.Val.i32(mb if nm == "__memory_base" else tb))
+                elif m == "env" and nm == "__stack_pointer":
+                    item = main["__stack_pointer"]
+                elif m == "env" and nm in ("__cpp_exception", "__c_longjmp"):
+                    item = main.get(nm) or (wt.Tag(c, ty) if isinstance(ty, wt.TagType) else None)
+                elif m in ("GOT.mem", "GOT.func"):
+                    item = wt.Global(c, wt.GlobalType(i32, True), wt.Val.i32(0))
+                elif isinstance(ty, wt.FuncType):  # env or WASI (the other modules are handled above)
+                    if m == "env":
+                        item = self._env_func(nm)
+                    else:  # the glue gives a side module the main module's WASI imports: the adapter's or wasmtime's
+                        item = self._env_func(nm) if nm in _wasm.WASI_ROUTED else None
+                        try:
+                            item = item or self._wasi_func(nm)
+                        except Exception:  # not a WASI function: the lazy stub below, as for env
+                            pass
+                    if item is None:  # as Emscripten's glue: resolved when called, an error only if still missing then
+                        hit: list = []
+
+                        def lazy(caller, *args, _n=nm, _sc=scope, _own=own, _hit=hit):
+                            if not _hit:
+                                f = self._env_func(_n, _sc, _own)
+                                if f is None:
+                                    raise RuntimeError(f"Dynamic linking error: cannot resolve symbol {_n}")
+                                _hit.append(f)
+                            return _hit[0](caller, *args)
+
+                        item = wt.Func(self.guest.store, ty, lazy, access_caller=True)
+                        self.lazy.append(nm)
+                why = self._link_error(i, imp, item, number)
+                if why:
+                    return self._dl_reason(why)
+                if m in ("GOT.mem", "GOT.func"):
+                    got.append(item)
+                linker.define(c, m, nm, item)
+            inst = linker.instantiate(c, module)
+            ex = inst.exports(c)
+            exports = {e.name: ex[e.name] for e in module.exports}
+            for e in module.exports:  # relocateExports: ToInt32 of `value + memoryBase`, which a BigInt cannot do
+                t = e.type
+                if isinstance(t, wt.GlobalType) and str(t.content) == "i64" and not t.mutable:
+                    return self._dl_reason("TypeError: Cannot mix BigInt and other types, use explicit conversions")
+            own.update(exports)
+            self.instances.append({"exports": exports, "got": got, "global": False, "base": mb & 0xFFFFFFFF})
+            return len(self.instances) - 1
+        except Exception as exc:
+            return self._dl_fail("LinkError: WebAssembly.Instance()", exc)
+
+    def _define_exit(self, linker: Any) -> None:
+        """proc_exit as a process has it: any status, masked to 8 bits (wasmtime's own refuses 126 and above)."""
+        wt = self._wt
+        linker.allow_shadowing = True
+
+        def proc_exit(code: int) -> None:
+            raise GuestExit(code & 255)
+
+        linker.define_func("wasi_snapshot_preview1", "proc_exit", wt.FuncType([wt.ValType.i32()], []), proc_exit)
+
+    def _wasi_func(self, name: str) -> Any:
+        wt = self._wt
+        if self._wasi_linker is None:
+            self._wasi_linker = wt.Linker(_engine.engine())
+            self._wasi_linker.define_wasi()
+            self._define_exit(self._wasi_linker)
+        return self._wasi_linker.get(self.guest.cur[-1], "wasi_snapshot_preview1", name)
+
+    def _dl_scope(self, id_: int, scope: int) -> None:
+        """The module is loaded: its exports join the global namespace (scope 0) or the dlopen call's scope."""
+        if scope:
+            self.scopes.setdefault(scope, []).append(id_)
+        else:
+            self._gseq += 1
+            self.instances[id_]["global"] = self._gseq
+
+    def _dl_got_set(self, id_: int, i: int, v: int) -> None:
+        self.instances[id_]["got"][i].set_value(self.guest.cur[-1], v)
+
+    def _table_slot(self, f: Any) -> tuple[int, bool]:
+        """The table slot that holds function `f` (the glue's getFunctionAddress: the pointer C takes of a function
+        and the one dlsym gives are the same number), else a new slot. -> (slot, made now)."""
+        wt = self._wt
+        c = self.guest.cur[-1]
+        key = bytes(f._func)
+        size = self.guest.table.size(c)
+        for i in range(self._tscanned, size):  # the table is scanned once, then only what was added
+            g = self.guest.table.get(c, i)
+            if isinstance(g, wt.Func):
+                self._tfuncs.setdefault(bytes(g._func), i)
+        self._tscanned = size
+        slot = self._tfuncs.get(key)
+        if slot is not None:
+            g = self.guest.table.get(c, slot)  # a slot that was set again since is not the function any more
+            if isinstance(g, wt.Func) and bytes(g._func) == key:
+                return slot, False
+        slot = self.guest.table.grow(c, 1, wt.Val.funcref(f))
+        self._tfuncs[key] = slot
+        self._tscanned = slot + 1
+        return slot, True
+
+    def _dl_sym(self, id_: int, p: int, n: int, out: int) -> int:
+        wt = self._wt
+        c = self.guest.cur[-1]
+        name = self._rd(p, n).decode("utf-8", "replace")
+        exports = self.instances[id_]["exports"]
+        e = exports.get(name)
+        if isinstance(e, wt.Global):
+            ty = e.type(c)
+            kind, val = str(ty.content), e.value(c)
+            base = self.instances[id_].get("base", 0)  # the glue's relocateExports: an immutable global + memoryBase
+            if kind in ("i32", "f32", "f64"):
+                # ToInt32 of the number, NaN and infinity are 0 (the sum of a float and the base is a float too)
+                v = val if ty.mutable else val + base
+                v = int(v) if v == v and abs(v) != float("inf") else 0
+                self._wr(out, struct.pack("<II", 1, 0))
+                return s32(v & 0xFFFFFFFF)
+            if ty.mutable:  # a reference (ToNumber: 0) or an i64 (ToInt32 throws) is no GOT symbol
+                if struct.unpack("<I", self._rd(out + 4, 4))[0] == 0:  # the GOT asks (out[1] = 0)
+                    return 0
+                if kind == "i64":
+                    raise RuntimeError("TypeError: Cannot convert a BigInt value to a number")
+                self._wr(out, struct.pack("<II", 1, 0))
+                return 0
+            if kind != "i64":  # an immutable reference: null + base is the base, a function + base is NaN
+                self._wr(out, struct.pack("<II", 1, 0))
+                return s32((base if getattr(val, "value", 1) is None else 0) & 0xFFFFFFFF)
+            self._wr(out, struct.pack("<II", 0, 0))
+            return 0
+        if isinstance(e, wt.Func):
+            if (id_, name) in self.slots:
+                slot, new = self.slots[(id_, name)], False
+            else:
+                slot, new = self._table_slot(e)
+                self.slots[(id_, name)] = slot
+            # kind 3: a slot made by this lookup, with the export's index (the glue's symbolIndex)
+            self._wr(out, struct.pack("<II", 3 if new else 2, list(exports).index(name) if new else 0))
+            return s32(slot)
+        self._wr(out, struct.pack("<II", 0, 0))
+        return 0
+
+    def _dl_call(self, id_: int, p: int, n: int) -> int:
+        e = self.instances[id_]["exports"].get(self._rd(p, n).decode())
+        if isinstance(e, self._wt.Func):
+            try:
+                e(self.guest.cur[-1])
+            except GuestExit:  # exit() in a constructor: the glue's catch makes it a failed load (text: JS's `${e}`)
+                return self._dl_reason("[object Object]")
+            except (
+                Exception
+            ) as exc:  # a trap, an uncaught wasm exception: the glue's catch(e) makes any of them a failed load
+                return self._dl_fail("RuntimeError", exc)
+            return 1
+        return 0
+
+    # ------------------------------------------------------------------ the table's functions
+    def _table_func(self, idx: int) -> Any:
+        f = self.guest.table.get(self.guest.cur[-1], idx)
+        if not isinstance(f, self._wt.Func):
+            raise TypeError(f"table entry {idx} is null")
+        return f
+
+    def _js_call(self, idx: int, args: list) -> Any:
+        """`wasmTable.get(idx)(...args)`: args are Numbers (int, float) or BigInts (Big); the JavaScript result. What a
+        table entry is does not change (only a closure's slot does: `_ffi_prep`, `_ffi_free`), so its type is kept."""
+        ctx = self.guest.cur[-1]
+        known = self.functions.get(idx)
+        if known is None:
+            f = self._table_func(idx)
+            ty = f.type(ctx)
+            known = self.functions[idx] = (f, [str(t) for t in ty.params], [str(t) for t in ty.results])
+        f, types, results = known
+        vals = [to_wasm(args[k] if k < len(args) else None, t) for k, t in enumerate(types)]
+        return from_wasm(f(ctx, *vals), results)
+
+    def _call_any(self, fn: int, a: int, b: int, c: int) -> int:
+        fn &= U32  # a, b, c are JavaScript Numbers: signed
+        """`_PyEM_TrampolineCall_JS` for a table entry whose type the WAT trampoline does not know."""
+        return to_wasm(self._js_call(fn, [a, b, c]), "i32")
+
+    def _ffi_call(self, cif: int, fn: int, rvalue: int, avalue: int) -> None:
+        cif, fn, rvalue, avalue = cif & U32, fn & U32, rvalue & U32, avalue & U32
+        ctx = self.guest.cur[-1]
+        sp = self.guest.ex["__stack_pointer"]
+        orig = sp.value(ctx)
+        args, cur, rid = _cif.call_args(self._rd, self._wr, cif, rvalue, avalue, orig)
+        cur &= ~15  # the stack pointer stays 16-aligned (WASI wants out structures aligned to 8)
+        if cur == orig:  # nothing on the stack: stackRestore(cur) is a no-op
+            res = self._js_call(fn, args)
+        else:
+            sp.set_value(ctx, cur)
+            try:
+                res = self._js_call(fn, args)
+            finally:
+                sp.set_value(ctx, orig)
+        _cif.store_result(self._wr, rvalue, rid, res)
+
+    def _ffi_slot(self) -> int:
+        """getEmptyTableSlot(): a freed slot (the last freed first), else the table grown by one."""
+        self.closures_out += 1
+        if self.free_slots:
+            return self.free_slots.pop()
+        return self.guest.table.grow(self.guest.cur[-1], 1, self._wt.Val.funcref(None))
+
+    def _ffi_free(self, index: int) -> None:
+        index &= U32
+        self.closures_out -= 1
+        self.functions.pop(index, None)
+        self._ffi_release(index)
+        self.guest.table.set(self.guest.cur[-1], index, self._wt.Val.funcref(None))
+        self.free_slots.append(index)
+
+    def _ffi_prep(self, closure: int, cif: int, fun: int, user_data: int, codeloc: int) -> int:
+        """Puts a host function of the closure's signature into table slot `codeloc`; when the guest calls it, the
+        arguments are written to the stack as libffi's `avalue` and `fun(cif, ret, args, user_data)` is called."""
+        wt = self._wt
+        closure, cif, fun, user_data, codeloc = (x & U32 for x in (closure, cif, fun, user_data, codeloc))
+        params, results, rk, info, ret_by_arg, nargs, nfixed = _cif.closure_signature(self._rd, wt, cif)
+
+        # A wasmtime Func is never freed before its store, so closures reuse them: one per signature and per live
+        # closure, with the closure's own data in a list that the Func's callback reads when it is called.
+        key = (tuple(str(t) for t in params), tuple(str(t) for t in results))
+        self._ffi_release(codeloc)
+        pool = self.func_pool.setdefault(key, [])
+        if pool:
+            func, state = pool.pop()
+        else:
+            state = []
+
+            trampoline = self.guest.wrap(functools.partial(self._ffi_closure, state))
+
+            try:
+                func = wt.Func(self.guest.store, wt.FuncType(params, results), trampoline, access_caller=True)
+            except Exception:  # JavaScript: convertJsFunctionToWasm failed
+                return 1
+        state[:] = [closure, nargs, nfixed, info, ret_by_arg, rk]
+        self.functions.pop(codeloc, None)
+        self.guest.table.set(self.guest.cur[-1], codeloc, func)
+        self.live_funcs[codeloc] = (key, func, state)
+        self._wr(closure + 4, struct.pack("<III", cif, fun, user_data))
+        return 0
+
+    def _ffi_release(self, index: int) -> None:
+        """The Func of the closure in table slot `index` goes back to the pool of its signature."""
+        held = self.live_funcs.pop(index, None)
+        if held:
+            key, func, state = held
+            state.clear()
+            self.func_pool[key].append((func, state))
+
+    def _ffi_closure(self, state: list, *a: Any) -> Any:
+        rk = state[5]  # the closure's own entry may be released while it runs (`state` is then cleared)
+        ctx = self.guest.cur[-1]
+        sp = self.guest.ex["__stack_pointer"]
+        orig = sp.value(ctx)
+        cif, fun, user_data, ret_ptr, args_ptr, cur = _cif.closure_frame(self._rd, self._wr, state, a, orig)
+        sp.set_value(ctx, cur & ~15)  # 16-aligned, as the compiled code expects
+        try:
+            self._table_func(fun)(ctx, *(to_wasm(x, "i32") for x in (cif, ret_ptr, args_ptr, user_data)))
+        finally:
+            sp.set_value(ctx, orig)
+        return _cif.closure_result(self._rd, rk, ret_ptr)
+
+    # ------------------------------------------------------------------ local time (_timecalc)
+    def _t_localtime(self, t: int, tm: int) -> int:
+        return _timecalc.t_localtime(self._wr, t, tm)
+
+    def _t_mktime(self, tm: int) -> int:
+        return _timecalc.t_mktime(self._rd, self._wr, tm)
+
+    def _t_tzset(self, timezone: int, daylight: int, std_name: int, dst_name: int) -> None:
+        _timecalc.t_tzset(self._wr, timezone, daylight, std_name, dst_name)
+
+    # ------------------------------------------------------------------ signals and the runtime's name
+    def _set_runtime(self) -> None:
+        """`sys._emscripten_info.runtime`: the name goes into a block of the adapter's, once per start (after a
+        restore too: the adapter's global is new, the string in the restored memory is not referenced again)"""
+        from . import __version__
+
+        b = f"pyodide-nojs {__version__}".encode() + b"\0"
+        p = self._svc_ex["__nojs_set_runtime"](self.guest.store, len(b)) & 0xFFFFFFFF
+        if p:  # out of memory: no name is set, and the adapter's _Py_emscripten_runtime answers NULL
+            self._wr(p, b)
+
+    def _dl_depth(self) -> int:
+        """How many NEEDED libraries the adapter may nest: what the wasm stack in force allows."""
+        _engine.engine()
+        return _engine.depth_cap(_engine.STATE["wasm_stack"])
+
+    def _arm_signals(self) -> None:
+        """When the start is over (the start code and the preload have run: a signal must not land in them), on the
+        guest's thread: remember where `interrupt` writes (the cell the adapter's `check_signals` reads, Python's flag
+        byte, the memory's base address). The adapter makes the cell's block at the first ask."""
+        store = self.guest.store
+        cell = self._svc_ex["__nojs_sigcell_addr"](store) & 0xFFFFFFFF
+        if not cell:
+            raise RuntimeError("the guest is out of memory: no word for the signal")
+        flag = self.instances[0]["exports"]["Py_EMSCRIPTEN_SIGNAL_HANDLING"].value(store)
+        size = self.guest.memory.data_len(store)
+        if not (0 <= flag < size and 0 < cell and cell + 8 <= size):  # both come from the guest: a foreign main module
+            raise RuntimeError(f"the guest's signal words are outside its memory ({flag=}, {cell=}, {size=})")
+        base = ctypes.addressof(self.guest.memory.data_ptr(store).contents) if _engine.STATE["stable_memory"] else None
+        with self._sig_lock:
+            self._sig = (base, cell, flag)
+
+    def interrupt(self, signum: int = 2) -> None:
+        """Post signal `signum` (SIGINT: KeyboardInterrupt) to the guest's Python, as JavaScript's
+        ``Py_EmscriptenSignalBuffer[0] = 2`` does: Python takes it when it next looks for
+        signals, between bytecodes of the running code (within about 50 of them), not inside one long C call and not
+        while it waits in a system call (``time.sleep`` is a spin of libc here: not yet interruptible). Call it from
+        any thread, a signal handler included, while the guest runs in another (as Pyodide's docs advise), or between
+        ``run()`` calls: a signal posted between runs is taken by the next one, a late one (posted after the last
+        look of a run) is dropped at the end of that run. RuntimeError if the guest is not started or is closed.
+
+        Until the start (the start code and the ``preload``) has finished the guest is not armed: RuntimeError.
+        A host where the memory can not be reserved for good (not 64-bit) raises RuntimeError: a raw write is unsafe."""
+        # One lock, held for the whole write and by close() when it forgets the memory: a thread never writes into
+        # memory that is freed (the Store, and the memory with it, is dropped only after `_sig` is None). RLock: a
+        # signal handler on the thread that holds it must not deadlock. Nothing else is held or waited for under it.
+        with self._sig_lock:
+            sig = self._sig
+            if sig is None:
+                raise RuntimeError("the guest is not running")
+            base, cell, flag = sig
+            if base is None:
+                raise RuntimeError("interrupt() from another thread needs a host where the memory cannot move")
+            self.host_state = True  # a snapshot of the memory would not hold a posted signal
+            self._sig_posted = self._sig_since_run = True  # before the write: a run that takes it knows (130)
+            # Safe against the running guest: the memory can not move (engine(): memory_may_move off, 4 GiB reserved,
+            # the most a 32-bit memory can have), so base + address is valid for as long as `_sig` is set, and what
+            # is written is one aligned word and one byte that the adapter and CPython read with plain loads. The
+            # cell first: the look that sees the flag finds the cell.
+            # Two words: SIGINT's own (the one after the cell) and one for any other signal, so a Ctrl-C and a resize
+            # never replace each other; of other signals a pending one is not replaced by a later one. (The guest
+            # clears a word when it takes it; of two other signals posted in the window of a few instructions between
+            # its look and its clear one can be lost, as can a second Ctrl-C, which merges with the first.)
+            if signum == 2:
+                ctypes.memmove(base + cell + 4, struct.pack("<I", 2), 4)
+            elif not ctypes.c_uint32.from_address(base + cell).value:
+                ctypes.memmove(base + cell, struct.pack("<I", signum), 4)
+            ctypes.memmove(base + flag, b"\x01", 1)  # opt-in: no look for signals (no cost) until the first post
+
+    def _cpu_clock(self, cid: int, res: int, out: int) -> int:
+        return _timecalc.cpu_clock(self._wr, cid, res, out)
+
+    # ------------------------------------------------------------------ the host's view of the files
+    def _preopen_dir(self, pfd: int) -> str | None:
+        """The host folder of a preopen, named by its WASI descriptor (3 + its place in the order they are opened here:
+        the guest's root, the mounts). The guest never gives the host a path: the adapter has proved that the
+        guest's path exists through WASI and names only the preopen it belongs to."""
+        assert self.root is not None
+        dirs = [str(self.root), *self.mounts.values()]
+        return dirs[pfd - 3] if 3 <= pfd < 3 + len(dirs) else None
+
+    def _fs_statvfs(self, pfd: int, buf: int) -> int:
+        """statfs of a preopen's folder -> Emscripten's struct statfs64 (88 bytes) at ``buf``; -errno on failure.
+        Without os.statvfs (Windows) the numbers come from shutil.disk_usage: the files and ffree counts are 0."""
+        try:
+            host = self._preopen_dir(pfd)
+            if host is None:
+                return -WASI_ERRNO["BADF"]
+            b = bytearray(88)
+            if hasattr(os, "statvfs"):
+                st = os.statvfs(host)
+                struct.pack_into("<I", b, 4, st.f_bsize)
+                struct.pack_into("<5Q", b, 8, st.f_blocks, st.f_bfree, st.f_bavail, st.f_files, st.f_ffree)
+                struct.pack_into("<III", b, 56, st.f_namemax, st.f_frsize, st.f_flag)
+            else:
+                du = shutil.disk_usage(host)
+                struct.pack_into("<I", b, 4, 4096)
+                struct.pack_into("<5Q", b, 8, du.total // 4096, du.free // 4096, du.free // 4096, 0, 0)
+                struct.pack_into("<III", b, 56, 255, 4096, 0)
+            self._wr(buf, bytes(b))
+            return 0
+        except OSError as e:
+            return werr(e)
+        except Exception:  # never a trap in the guest
+            return -WASI_ERRNO["IO"]
+
+    def _fs_ioctl(self, fd: int, op: int, argp: int) -> int:
+        """ioctl on one of the host's standard descriptors (the guest never names another): the requests _tty.py knows
+        (the terminal's, Linux's numbers), ENOTTY for the rest."""
+        if fd not in (0, 1, 2):
+            return -WASI_ERRNO["BADF"]
+        r = _tty.request(self._tty_saved, op, fd, argp, self._rd, self._wr)
+        if self._tty_saved:
+            self.host_state = True  # the host's terminal is changed: a snapshot of the memory would not hold that
+        return r
+
+    def _fs_read(self, fd: int, p: int, n: int) -> int:
+        """The guest's read of its stdin when that is a host TERMINAL (the adapter asks; a pipe or file stays on WASI):
+        at most N bytes, as many as there are (a blocking os.read: one call, no read-ahead, so the terminal's own
+        queue stays the truth for poll and tcflush; wasmtime's stdin would keep what it read before the guest asked).
+        0 is the end of the input."""
+        if fd != 0:
+            return -WASI_ERRNO["BADF"]
+        data = os.read(0, min(n, 1 << 20))
+        self._wr(p, data)
+        return len(data)
+
+    # The operations that call into the guest (a ctypes call, a callback, the trampoline) or fail on purpose as
+    # JavaScript throws: their exceptions (a callee's trap, exit(), a TypeError) reach run(), which ends the guest.
+    RAISING = frozenset(
+        (
+            "ffi_call",
+            "ffi_prep",
+            "ffi_slot",
+            "ffi_free",
+            "call_any",
+            "localtime",
+            "mktime",
+            "tzset",
+            "depth",
+        )
+    )
+
+    def _wrap(self, fn, nres: int, fail: int | None = 0):
+        """A loader operation: no exception reaches the wasm (it would be a trap that ends the interpreter); a pointer
+        outside the memory or an unforeseen host error is logged and answered with `fail` (0; -1 for instantiate).
+        `fail=None`: the exception goes on."""
+
+        if fail is None:
+            return self.guest.wrap(fn, None, not nres)
+
+        def handle(_e: Exception) -> int:
+            log.exception("[loader] %s failed", fn.__name__)
+            return fail
+
+        return self.guest.wrap(fn, handle, not nres)
+
+    def _ops(self) -> tuple[dict, dict, dict]:
+        wt = self._wt
+        i32 = wt.ValType.i32()
+
+        def ft(n, r=1):
+            return wt.FuncType([i32] * n, [i32] * r)
+
+        loader = {
+            "instantiate": (self._dl_instantiate, ft(5)),
+            "scope": (self._dl_scope, ft(2, 0)),
+            "got_set": (self._dl_got_set, ft(3, 0)),
+            "sym": (self._dl_sym, ft(4)),
+            "call": (self._dl_call, ft(3)),
+            "ffi_call": (self._ffi_call, ft(4, 0)),
+            "ffi_prep": (self._ffi_prep, ft(5)),
+            "ffi_slot": (self._ffi_slot, ft(0)),
+            "ffi_free": (self._ffi_free, ft(1, 0)),
+            "call_any": (self._call_any, ft(4)),
+            "localtime": (self._t_localtime, wt.FuncType([wt.ValType.i64(), i32], [i32])),
+            "mktime": (self._t_mktime, wt.FuncType([i32], [wt.ValType.i64()])),
+            "tzset": (self._t_tzset, ft(4, 0)),
+            "depth": (self._dl_depth, ft(0)),
+            "cpuclock": (self._cpu_clock, ft(3)),
+            "error": (self._dl_error, ft(5, 0)),
+        }
+        net = self.net.ops(ft)
+        fs = {"statvfs": (self._fs_statvfs, ft(2)), "ioctl": (self._fs_ioctl, ft(3)), "read": (self._fs_read, ft(3))}
+        return loader, net, fs
+
+    # ------------------------------------------------------------------ start
+    def _start(self) -> None:
+        wt = self._wt
+        engine = _engine.engine()
+        if not self._override_checked:
+            self._override_checked = True
+            warn, detail = override_warnings(self.asm_wasm, self.stdlib, self.data)
+            for w in warn:
+                log.warning("pyodide-nojs: %s", w)
+            for d in detail:
+                log.info("pyodide-nojs: %s", d)
+        self._setup_root()
+        assert self.root is not None
+        store = wt.Store(engine)
+        # growth that Pyodide's glue gets as a RangeError (a dylink table of 2^31 slots, memory beyond 4 GiB) fails
+        # here as -1 from memory.grow / table.grow, which the loader turns into a dlerror (not an error of the host)
+        store.set_limits(memory_size=MAX_MEMORY, table_elements=MAX_TABLE)
+        wasi = wt.WasiConfig()
+        wasi.env = self._wasi_env()
+        wasi.preopen_dir(str(self.root), "/")
+        for guest, host in self.mounts.items():
+            wasi.preopen_dir(host, guest)
+        wasi.inherit_stdin()
+        wasi.inherit_stdout()
+        wasi.inherit_stderr()
+        store.set_wasi(wasi)
+        loader_ops, net_ops, fs_ops = self._ops()
+        I32 = wt.ValType.i32()  # noqa: N806
+
+        def define_ops(linker):
+            for name, (fn, ty) in loader_ops.items():
+                linker.define_func(
+                    "loader",
+                    name,
+                    ty,
+                    self._wrap(
+                        fn, len(ty.results), None if name in self.RAISING else -1 if name == "instantiate" else 0
+                    ),
+                    access_caller=True,
+                )
+            for name, (fn, ty) in net_ops.items():
+                linker.define_func("net", name, ty, self.guest.wrap_net(name, fn), access_caller=True)
+            for name, (fn, ty) in fs_ops.items():
+                linker.define_func("fs", name, ty, self.guest.wrap_net(name, fn), access_caller=True)
+
+        if self.flavor == "fused":
+            main_mod = _engine.load_module(self.data / "pyodide_fused.wasm")
+            linker = wt.Linker(engine)
+            linker.define_wasi()
+            self._define_exit(linker)
+            define_ops(linker)
+            ex = _engine.LazyExports(store, linker.instantiate(store, main_mod), main_mod)
+            self.guest.bind(store, ex)
+            self.instances[0] = {"exports": MainExports(self.guest.ex), "got": []}
+            self._svc_ex = self.guest.ex
+            self.instances[0]["exports"].hidden.update(SERVICE_EXPORTS)
+            self._drop_stubs()
+            mods: dict[str, int] = {}
+            for i in main_mod.imports:
+                mods[i.module] = mods.get(i.module, 0) + 1
+            self.summary = "fused: one module; its imports: " + ", ".join(f"{k} ({v})" for k, v in mods.items())
+        else:
+            main_path = self.asm_wasm or self.data / "pyodide.asm.wasm"
+            adapter_bytes = (self.data / "adapter.wasm").read_bytes()
+            _wasm.check_sections(adapter_bytes)
+            adapter_mod = _engine.load_module(self.data / "adapter.wasm")
+            allowed = {
+                "memory",
+                "__indirect_function_table",
+                "__stack_pointer",
+                "__memory_base",
+                "__table_base",
+                "malloc",
+                "calloc",
+                "free",
+                "getentropy",
+                "emscripten_builtin_memalign",
+                "_emscripten_find_dylib",
+            }
+            for i in adapter_mod.imports:
+                assert i.module in ("wasi_snapshot_preview1", "loader", "aux", "net", "fs") or (
+                    i.module == "env" and i.name in allowed
+                ), (i.module, i.name)
+            adapter_names = [
+                e.name
+                for e in adapter_mod.exports
+                if isinstance(e.type, wt.FuncType) and not e.name.startswith("__wasm")
+            ]
+            fwd = {n: k for k, n in enumerate([*adapter_names, _wasm.TRAMP])}
+            done: list[Path] = []
+            main_mod = _engine.load_module(
+                main_path,
+                content_key=self.asm_wasm is not None,
+                wasm_opt=self.wasm_opt if self.asm_wasm else None,
+                converted=done,
+            )
+            if done:
+                log.warning("pyodide-nojs: %s: converted from legacy exceptions at start; cached", main_path)
+            imports = _wasm.func_imports(main_mod)
+            got = [i.name for i in main_mod.imports if i.module == "GOT.func"]
+            shim_mod = wt.Module(engine, wt.wat2wasm(_wasm.shim_wat(imports, fwd, got)))
+            shim = wt.Linker(engine).instantiate(store, shim_mod).exports(store)
+
+            linker = wt.Linker(engine)
+            linker.define_wasi()
+            self._define_exit(linker)
+            for n in _wasm.WASI_ROUTED:
+                if n in fwd:
+                    linker.define(store, "wasi_snapshot_preview1", n, shim["wasi:" + n])
+            n_env = {"adapter": 0, "stub": 0}
+            for m, n, _ps, _rs in imports:
+                if m == "env":
+                    linker.define(store, m, n, shim[n])
+                    n_env["adapter" if n in fwd else "stub"] += 1
+            for g in got:
+                linker.define(store, "GOT.func", g, shim["got:" + g])
+            ex = _engine.LazyExports(store, linker.instantiate(store, main_mod), main_mod)
+            self.guest.bind(store, ex)
+            self.instances[0] = {"exports": MainExports(self.guest.ex), "got": []}
+
+            tl = wt.Linker(engine)
+            tl.define(store, "env", "__indirect_function_table", self.guest.table)
+            define_ops(tl)  # the trampoline's fallback for a type it does not know is a host operation
+            tramp = tl.instantiate(store, wt.Module(engine, wt.wat2wasm(_wasm.TRAMP_WAT))).exports(store)
+
+            al = wt.Linker(engine)
+            al.define_wasi()
+            self._define_exit(al)
+            al.define(store, "env", "memory", self.guest.memory)
+            al.define(store, "env", "__indirect_function_table", self.guest.table)
+            al.define(store, "env", "__stack_pointer", self.guest.ex["__stack_pointer"])
+            al.define(store, "env", "__memory_base", wt.Global(store, wt.GlobalType(I32, False), wt.Val.i32(0)))
+            al.define(store, "env", "__table_base", wt.Global(store, wt.GlobalType(I32, False), wt.Val.i32(0)))
+            for f in (
+                "malloc",
+                "calloc",
+                "free",
+                "getentropy",
+                "emscripten_builtin_memalign",
+                "_emscripten_find_dylib",
+            ):
+                al.define(store, "env", f, self.guest.ex[f])
+            al.define(store, "aux", "table_grow", tramp["table_grow"])
+            define_ops(al)
+            adapter = al.instantiate(store, adapter_mod).exports(store)
+            # what the fused module exports: the main module's symbols and the adapter's (dlsym(NULL), the GOT)
+            self.instances[0]["exports"].extra.update({n: adapter[n] for n in adapter_names})
+            self.instances[0]["exports"].extra[_wasm.TRAMP] = tramp[_wasm.TRAMP]
+            self._svc_ex = adapter
+            self.instances[0]["exports"].hidden.update(SERVICE_EXPORTS)
+            table = shim["table"]  # fixup
+            for n, k in fwd.items():
+                table.set(store, k, wt.Val.funcref(tramp[n] if n == _wasm.TRAMP else adapter[n]))
+            self.summary = (
+                f"dynamic: env imports: {n_env['adapter']} answered by the adapter, {n_env['stub']} stubs in the "
+                f"shim; {len(got)} GOT.func globals in the shim"
+            )
+
+        # networking: the host's fetch and the main module's free in table slots, named to the guest in a file
+        f_fetch = wt.Func(store, wt.FuncType([I32] * 5, [I32]), self._wrap(self.net.fetch, 1), access_caller=True)
+        slots = (
+            self.guest.table.grow(store, 1, wt.Val.funcref(f_fetch)),
+            self.guest.table.grow(store, 1, wt.Val.funcref(self.guest.ex["free"])),
+        )
+        sp = self.root / "lib" / f"python{PYVER}" / "site-packages"
+        (sp / "_hostnet_slots.py").write_text(f"FETCH = {slots[0]}\nFREE = {slots[1]}\n")
+        log.info("[host] %s; WASI: wasmtime's own; the host's loader ops: %s", self.summary, ", ".join(loader_ops))
+        self._boot(slots)
+
+    def _wasi_env(self) -> list[tuple[str, str]]:
+        env = dict(BASE_ENV)
+        if self.inherit_env:
+            for k, v in os.environ.items():
+                if not k or "=" in k or k in GUEST_OWN_ENV:
+                    continue
+                try:
+                    k.encode()
+                    v.encode()
+                except UnicodeEncodeError:  # not UTF-8 (a surrogate-escaped byte): WASI's environment is text
+                    log.warning("--inherit-env: %r is not valid UTF-8 and is not passed to the guest", k)
+                    continue
+                env[k] = v
+        env.update(SSL_CERT_FILE="/etc/ssl/cert.pem", REQUESTS_CA_BUNDLE="/etc/ssl/cert.pem")
+        env.update(self.env)
+        return list(env.items())
+
+    def _at_start(self) -> str:
+        return "__import__('pyodide_nojs_run').start()\n"
+
+    def _chdir_home(self) -> None:
+        """Pyodide's JavaScript starts the guest in HOME (the cwd is not in a snapshot: this is run after a restore)."""
+        p = self.guest.guest_cstr(b"/home/pyodide")
+        rc = self.guest.ex["chdir"](self.guest.store, p)
+        self.guest.ex["free"](self.guest.store, p)
+        if rc != 0:  # not an assert: it must hold under python -O too
+            raise RuntimeError("chdir to /home/pyodide failed (does a mount= replace /home?)")
+
+    # ------------------------------------------------------------------ snapshot of the memory after `preload`
+    def _snapshot_path(self) -> Path:
+        mine = [p for p in (self.stdlib, self.asm_wasm) if p is not None]  # the user's: keyed by content
+        files = [
+            self.stdlib or self.data / "python_stdlib.zip",
+            *(
+                [self.data / "pyodide_fused.wasm"]
+                if self.flavor == "fused"
+                else [self.asm_wasm or self.data / "pyodide.asm.wasm", self.data / "adapter.wasm"]
+            ),
+        ]
+
+        def isatty(fd: int) -> bool:  # WASI inherits the OS's fds, not Python's sys.std* objects
+            try:
+                return os.isatty(fd)
+            except (OSError, ValueError):
+                return False
+
+        key = hashlib.sha256(
+            json.dumps(
+                [
+                    SNAPSHOT_VERSION,
+                    self.flavor,
+                    [_engine.file_stamp(f.resolve(), f in mine).decode() for f in files],
+                    PYVER,
+                    self.preload,
+                    code_hash(Path(__file__).resolve().parent),
+                    hashlib.sha256(
+                        b"".join(
+                            g.name.encode() + b"\0" + g.read_bytes()
+                            for g in sorted(GUEST.iterdir())
+                            if g.suffix in GUEST_SUFFIXES
+                        )
+                    ).hexdigest(),
+                    hashlib.sha256(f.read_bytes()).hexdigest()
+                    if (f := self.data / "pyodide-lock.json").exists()
+                    else None,
+                    self._wasi_env(),
+                    self._own_key(),
+                    [isatty(fd) for fd in (0, 1, 2)],  # the guest decides buffering at init
+                    # the time module read the host's zone at init (tzname, timezone, daylight, as _tzset_js gives them)
+                    [time.localtime().tm_year, *_timecalc.year_minutes(time.localtime().tm_year)],
+                ]
+            ).encode()
+        ).hexdigest()
+        return _engine.cache_dir() / f"snapshot-{self.flavor}-{key[:16]}.mem"
+
+    def _boot(self, slots: tuple[int, int]) -> None:
+        """Start CPython (or restore a snapshot of it after the preload) and run the preload."""
+        store = self.guest.store
+        self._net_slots = slots
+        self.restored = False
+        path = None
+        # with site= or mounts= the preload may need them, and the snapshot is taken without: no snapshot then
+        if (
+            self.preload is not None
+            and not self.site
+            and not self.mounts
+            and not self.inherit_env  # the snapshot is a file: the host's variables (secrets) must not get into it
+            and _engine.env("PYODIDE_NOJS_SNAPSHOT") != "0"
+        ):
+            path = self._snapshot_path()
+            if self._restore(path, slots):
+                self.restored = self._started = True
+                self._set_runtime()
+                self._chdir_home()
+                # the hash seed and `random`'s state are the snapshot's: a fresh seed, as a normal start has
+                self.run(self._at_start() + 'import sys; "random" in sys.modules and __import__("random").seed()')
+                if self._started:
+                    self._arm_signals()
+                return
+        self.guest.ex["emscripten_stack_init"](store)
+        self.guest.ex["__wasm_call_ctors"](store)
+        self._set_runtime()
+        self._chdir_home()
+        # Pyodide's own main(): PyConfig (home "/", stdlib_dir the zip, no bytecode, argv), Py_InitializeFromConfig; its
+        # argv[0] is Emscripten's thisProgram, "./this.program", which CPython resolves against the cwd
+        # (argv and its string stay allocated: 23 bytes, as the stack copies of Emscripten's callMain would be)
+        argv = self.guest.ex["malloc"](store, 8) & 0xFFFFFFFF
+        self.guest.memory.write(store, self.guest.guest_cstr(b"./this.program").to_bytes(4, "little") + bytes(4), argv)
+        rc = self.guest.ex["__main_argc_argv"](store, 1, argv)
+        if rc:
+            raise RuntimeError(f"Pyodide's main() returned {rc}: CPython did not start")
+        self._started = True
+        self.run(self._at_start())
+        saved = self.preload is not None and self.run(self.preload) == 0 and path is not None
+        if self._started:  # (a preload that ended the process closed the interpreter)
+            self._arm_signals()
+        if saved:
+            assert path is not None
+            self._save(path)
+
+    def _restore(self, path: Path, slots: tuple[int, int]) -> bool:
+        store = self.guest.store
+        try:
+            data = path.read_bytes()
+            nl = data.index(b"\n")
+            hdr = json.loads(data[:nl])
+            pages = hdr["pages"]
+            have = self.guest.memory.size(store)
+            if (
+                hdr["version"] != SNAPSHOT_VERSION
+                or hdr["slots"] != list(slots)
+                or pages < have
+                or len(data) - nl - 1 != pages * 65536
+            ):
+                return False
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        # all of the file is checked: from here on the memory is written once
+        self.guest.ex["emscripten_stack_init"](store)
+        if pages > have:
+            self.guest.memory.grow(store, pages - have)
+        src = ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p).value
+        assert src is not None
+        ctypes.memmove(ctypes.addressof(self.guest.memory.data_ptr(store).contents), src + nl + 1, pages * 65536)
+        if hdr["table"] > self.guest.table.size(store):
+            self.guest.table.grow(store, hdr["table"] - self.guest.table.size(store), self._wt.Val.funcref(None))
+        return True
+
+    _PROBE = (
+        "def _p():\n    import os\n    r = []\n    for i in range(64):\n        try: os.fstat(i); r.append(i)\n"
+        "        except OSError: pass\n    open('/_probe', 'w').write(repr((r, os.getcwd())))\n_p(); del _p\n"
+    )
+
+    def _probe(self) -> tuple[str, list[tuple[str, int]]]:
+        """What a snapshot does not hold: the guest's open fds and cwd, and the files under its root."""
+        self.run(self._PROBE)
+        assert self.root is not None
+        state = (self.root / "_probe").read_text()
+        files = [
+            (str(p.relative_to(self.root)), p.stat().st_size)
+            for p in sorted(self.root.rglob("*"))
+            if p.is_file() and p.name != "_probe"
+        ]
+        return state, files
+
+    def _save(self, path: Path) -> None:
+        """Write the snapshot from a throwaway interpreter (no site, no mounts), unless the preload changed what a
+        snapshot does not hold: dlopen, table slots, closures, signals, open fds, the cwd, files."""
+        fresh = Pyodide(
+            self.flavor,
+            env=self.env,
+            inherit_env=self.inherit_env,
+            data=self.data,
+            asm_wasm=self.asm_wasm,
+            stdlib=self.stdlib,
+        )
+        fresh._override_checked = True  # the warnings were given at this interpreter's start
+        with fresh:
+            before = fresh._probe()
+            rc = fresh.run(self.preload or "")
+            if (
+                rc != 0
+                or len(fresh.instances) != 1
+                or fresh.slots
+                or fresh.host_state
+                or fresh.closures_out
+                or fresh._probe() != before
+            ):
+                return
+            st = fresh.guest.store
+            pages = fresh.guest.memory.size(st)
+            hdr = {
+                "version": SNAPSHOT_VERSION,
+                "pages": pages,
+                "table": fresh.guest.table.size(st),
+                "slots": list(fresh._net_slots),
+            }
+            buf = (ctypes.c_char * (pages * 65536)).from_address(
+                ctypes.addressof(fresh.guest.memory.data_ptr(st).contents)
+            )
+            tmp = path.with_suffix(f".tmp{os.getpid()}")
+            try:
+                _engine.private_dir(path.parent)
+                with _engine.open_private(tmp) as f:
+                    f.write(json.dumps(hdr).encode() + b"\n")
+                    f.write(buf)
+                os.replace(tmp, path)
+                for old in path.parent.glob(f"snapshot-{self.flavor}-*.mem"):
+                    if old != path:
+                        old.unlink(missing_ok=True)
+            except OSError:
+                pass
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    # ------------------------------------------------------------------ public
+    def run(self, code: str, argv: list[str] | None = None, *, allow_top_level_await: bool = False) -> int:
+        """Run Python source in the guest, in its ``__main__``: 0 if it ran, 1 if it raised (the traceback is on
+        stderr; 130 for an uncaught KeyboardInterrupt, a shell's 128 + SIGINT), N for ``sys.exit(N)`` (a message or
+        None-like code as CPython's: text -> 1, None -> 0).
+        ``allow_top_level_await``: the code may ``await`` at its top level (``python -m asyncio``'s rule) and runs on
+        asyncio's default loop until it is over; without it an ``await`` there is a SyntaxError."""
+        if not self._started:
+            self._start()
+        text = code.encode()  # strict UTF-8, as the file it used to be written to
+        with self._sig_lock:  # (the flags are read and written under the lock interrupt() holds: no update is lost)
+            self._sig_posted = False  # only a post that comes during this run can be late for it: older ones persist
+        try:
+            if (
+                argv is not None
+            ):  # (not a line in front of the code: the program's line numbers and `from __future__` stay)
+                self._call_wrapper("\0".join(["", *argv]).encode(), "set_argv")  # NUL cannot be in an argument
+            rc = self._call_wrapper(text, "run_async" if allow_top_level_await else "run")
+        except (
+            GuestExit
+        ) as e:  # the process ended (exit(), os._exit(), a signal's default action): this interpreter is gone
+            self._exited = rc = e.status
+        except self._wt.Trap as e:  # abort(), a failed assert, an unreachable: the guest is dead
+            first = str(e).strip().splitlines()[0] if str(e).strip() else "trap"
+            print(f"pyodide-nojs: the guest trapped: {first}", file=sys.stderr)
+            self._exited = 134  # 128 + SIGABRT, as a process that aborts
+            rc = 134
+        except (
+            Exception
+        ) as e:  # a host function failed on purpose (JavaScript's TypeError, a pointer outside the memory)
+            tb = traceback.extract_tb(e.__traceback__)[-1]  # where, for a host that can not be reached to debug
+            print(
+                f"pyodide-nojs: a host function failed, the guest is dead: {type(e).__name__}: {e}"
+                f" (at {Path(tb.filename).name}:{tb.lineno}, in {tb.name})",
+                file=sys.stderr,
+            )
+            self._exited = 134  # as for a trap
+            rc = 134
+        except (
+            KeyboardInterrupt
+        ):  # Python's default SIGINT handler raised inside a host call (a read of the terminal): the
+            self._exited = rc = (
+                130  # guest was unwound in the middle of that call, so it is dead (not "alive and trapping")
+            )
+        finally:  # also for an exception that is none of those
+            _tty.restore(self._tty_saved)
+        with self._sig_lock:  # a post between the read and the clear would be forgotten, and the run it hits would
+            posted, self._sig_since_run = self._sig_posted or self._sig_since_run, False  # report 1, not 130
+        if self._sig_posted and self._exited is None:
+            self._drop_late_signal()
+        if self._exited is not None:
+            self.close()  # a next run() starts a new interpreter
+            self._exited = None
+        if rc is None:  # an error escaped the wrapper (a signal ended it itself)
+            rc = 130 if posted else 1
+        if self.lazy:
+            log.info("[loader] imports bound lazily (no definition at load): %s", ", ".join(sorted(set(self.lazy))))
+        self.net.flush_log()
+        return rc
+
+    def _call_wrapper(self, text: bytes, entry: str = "run") -> int | None:
+        """``pyodide_nojs_run.<entry>(text)`` (``run`` or ``run_async``) through the C API: its status, or None if an
+        error escaped it (cleared)."""
+        ex, store = self.guest.ex, self.guest.store
+        n = len(text)
+        blob = (
+            text + b"\0pyodide_nojs_run\0" + entry.encode() + b"\0"
+        )  # the code, then the two C strings the lookup needs
+        buf = ex["PyMem_Malloc"](store, len(blob))
+        self._wr(buf, blob)
+        refs = [ex["PyUnicode_DecodeUTF8"](store, buf, n, 0)]  # strict, as the file was read
+        mod = ex["PyImport_ImportModule"](store, buf + n + 1)
+        try:  # (buf is freed once the lookup is done)
+            fn = ex["PyObject_GetAttrString"](store, mod, buf + n + 18) if mod else 0
+            refs += [mod, fn]
+            ex["PyMem_Free"](store, buf)
+            res = ex["PyObject_CallOneArg"](store, fn, refs[0]) if fn and refs[0] else 0
+            if not res:
+                ex["PyErr_Clear"](store)
+                return None
+            refs.append(res)
+            return ex["PyLong_AsLong"](store, res)
+        finally:
+            for r in refs:
+                if r:
+                    ex["Py_DecRef"](store, r)
+
+    def _drop_late_signal(self) -> None:
+        """A signal that came after the last look of this run must not hit the next, unrelated one. Only the cell is
+        cleared: Python's flag byte is shared with the timers (setitimer sets it), so it stays set."""
+        with self._sig_lock:
+            self._sig_posted = False
+            if self._sig is not None:
+                self._wr(self._sig[1], bytes(8))  # both words
+
+    def close(self) -> None:
+        with self._sig_lock:  # before anything is freed: a writer in another thread then gets a RuntimeError
+            self._sig = None
+        self.net.close_all()
+        _tty.restore(self._tty_saved)
+        self.slots.clear()
+        self.instances = [None]
+        if self.root is not None:
+            shutil.rmtree(self.root, ignore_errors=True)
+            self.root = None
+        self.free_slots.clear()
+        self.host_state = False
+        self.closures_out = 0
+        self.functions.clear()
+        self.func_pool.clear()
+        self.live_funcs.clear()
+        self._started = False
+
+    def __enter__(self) -> Pyodide:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

@@ -1,0 +1,27 @@
+**/__pycache__
+**/.ruff_cache/
+**/.pytest_cache/
+**/.idea
+**/*.egg-info
+**/.venv
+**/build
+**/dist
+.vscode
+
+# written by setuptools_scm at build time
+src/pyodide_nojs/_version.py
+# coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# built by tools/build_data.sh (not committed; CI builds them, the wheel carries them)
+src/pyodide_nojs/data/*
+!src/pyodide_nojs/data/.gitkeep
+# compiled-module caches, and the work folder of the build and of the test runs
+*.cwasm
+/pyo-build/
+
+# git worktrees of the agents that work in parallel (each is its own checkout)
+/.claude/worktrees/
